@@ -27,7 +27,7 @@
             </el-dropdown>
           </template>
           <template v-else>
-            <el-button type="primary" @click="$router.push('/login')">登录</el-button>
+            <el-button type="primary" @click="goLogin">登录</el-button>
           </template>
         </div>
       </el-header>
@@ -61,6 +61,11 @@ function handleCommand(command: string) {
       router.push('/')
       break
   }
+}
+
+// 顶部登录按钮：跳转到登录页，登录后按角色自动跳转
+function goLogin() {
+  router.push('/login')
 }
 </script>
 

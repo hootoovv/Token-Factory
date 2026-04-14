@@ -82,8 +82,8 @@ const form = ref({
   description: '',
   base_url: '',
   api_key: '',
-  timeout: 30,
-  retry: 3,
+  timeout: 60,
+  retry: 1,
   status: 'active',
 })
 

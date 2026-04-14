@@ -55,8 +55,18 @@ async function handleLogin() {
     try {
       await userStore.login(form.username, form.password)
       ElMessage.success('登录成功')
-      const redirect = (route.query.redirect as string) || '/'
-      router.push(redirect)
+      // 如果有指定重定向地址，优先跳转
+      const redirect = route.query.redirect as string
+      if (redirect) {
+        router.push(redirect)
+        return
+      }
+      // 否则按角色跳转：管理员进后台，普通用户进个人中心
+      if (userStore.isAdmin) {
+        router.push('/admin')
+      } else {
+        router.push('/user')
+      }
     } catch (e: any) {
       // 错误已在拦截器中处理
     } finally {
