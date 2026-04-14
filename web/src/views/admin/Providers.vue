@@ -134,8 +134,8 @@ function editProvider(provider: any) {
     description: provider.description || '',
     base_url: provider.base_url,
     api_key: provider.api_key || '',
-    timeout: provider.timeout || 30,
-    retry: provider.retry || 3,
+    timeout: provider.timeout || 60,
+    retry: provider.retry || 1,
     status: provider.status || 'active',
   }
   dialogVisible.value = true
