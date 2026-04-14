@@ -1,0 +1,22 @@
+# frontend
+node_modules/
+dist/
+build/
+*.log
+
+# IDE
+.vscode/
+*~
+
+# Logs
+*.log
+
+# Database
+*.db
+
+# OS
+.DS_Store
+Thumbs.db
+
+# LSP / Type checking
+.ruff_cache/

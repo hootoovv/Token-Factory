@@ -1,0 +1,85 @@
+package config
+
+import (
+	"fmt"
+	"os"
+
+	"gopkg.in/yaml.v3"
+)
+
+// Config 主配置结构
+type Config struct {
+	ProxyListen string         `yaml:"proxy_listen"`
+	AdminListen string         `yaml:"admin_listen"`
+	Database    DatabaseConfig `yaml:"database"`
+	Admin       AdminConfig    `yaml:"admin"`
+	JWTSecret   string         `yaml:"jwt_secret"`
+}
+
+// DatabaseConfig 数据库配置
+type DatabaseConfig struct {
+	Type string `yaml:"type"` // sqlite / mysql / postgres
+	DSN  string `yaml:"dsn"`  // 连接字符串
+}
+
+// AdminConfig 默认管理员配置
+type AdminConfig struct {
+	Username string `yaml:"username"`
+	Password string `yaml:"password"`
+}
+
+// LoadConfig 加载配置文件，文件不存在则返回默认配置
+func LoadConfig(path string) (*Config, error) {
+	cfg := defaultConfig()
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			fmt.Printf("[配置] 配置文件 %s 不存在，使用默认配置\n", path)
+			return cfg, nil
+		}
+		return nil, fmt.Errorf("读取配置文件失败: %w", err)
+	}
+
+	if err := yaml.Unmarshal(data, cfg); err != nil {
+		return nil, fmt.Errorf("解析配置文件失败: %w", err)
+	}
+
+	// 填充默认值
+	if cfg.ProxyListen == "" {
+		cfg.ProxyListen = ":11444"
+	}
+	if cfg.AdminListen == "" {
+		cfg.AdminListen = ":8080"
+	}
+	if cfg.Database.Type == "" {
+		cfg.Database.Type = "sqlite"
+	}
+	if cfg.Database.DSN == "" {
+		cfg.Database.DSN = "data/token_factory.db"
+	}
+	if cfg.Admin.Username == "" {
+		cfg.Admin.Username = "admin"
+	}
+	if cfg.Admin.Password == "" {
+		cfg.Admin.Password = "admin123"
+	}
+
+	return cfg, nil
+}
+
+func defaultConfig() *Config {
+	return &Config{
+		ProxyListen: ":11444",
+		AdminListen: ":8080",
+		Database: DatabaseConfig{
+			Type: "sqlite",
+			DSN:  "data/token_factory.db",
+		},
+		Admin: AdminConfig{
+			Username: "admin",
+			Password: "admin123",
+		},
+		JWTSecret: "",
+	}
+}

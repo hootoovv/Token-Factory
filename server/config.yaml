@@ -1,0 +1,25 @@
+# Token Factory - 企业级LLM API代理中心配置文件
+
+# 代理服务监听地址（API转发端口）
+proxy_listen: ":11444"
+
+# 管理端监听地址（Web管理界面）
+admin_listen: ":8080"
+
+# 数据库配置
+database:
+  # 数据库类型: sqlite / mysql / postgres
+  type: sqlite
+  # 数据库连接字符串
+  # sqlite: data/token_factory.db
+  # mysql: user:password@tcp(127.0.0.1:3306)/token_factory?charset=utf8mb4&parseTime=True&loc=Local
+  # postgres: host=127.0.0.1 port=5432 user=postgres password=postgres dbname=token_factory sslmode=disable
+  dsn: "data/token_factory.db"
+
+# 默认管理员账户（仅首次启动时创建）
+admin:
+  username: admin
+  password: admin123
+
+# JWT密钥（为空则自动生成，重启后旧Token失效）
+jwt_secret: ""
