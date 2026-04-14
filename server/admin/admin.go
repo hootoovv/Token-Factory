@@ -302,15 +302,20 @@ func (s *Server) handleCreateAPIKey(c *gin.Context) {
         userID := c.GetUint("userID")
         var req struct {
                 Name string `json:"name"`
+                Key  string `json:"key"` // 前端生成的密钥，为空则后端自动生成
         }
         if err := c.ShouldBindJSON(&req); err != nil {
                 req.Name = "Default Key"
         }
 
-        // 生成 sk-xxxx 格式的密钥
-        keyBytes := make([]byte, 32)
-        rand.Read(keyBytes)
-        apiKey := fmt.Sprintf("sk-%x", keyBytes)
+        var apiKey string
+        if req.Key != "" {
+                // 使用前端传入的密钥
+                apiKey = req.Key
+        } else {
+                // 后端自动生成 tk- 前缀 + 32位随机字符
+                apiKey = generateAPIKey()
+        }
 
         newKey := database.APIKey{
                 UserID: userID,
@@ -749,4 +754,19 @@ func (s *Server) getPageSize(c *gin.Context) int {
                 size = 20
         }
         return size
+}
+
+// generateAPIKey 生成 tk- 前缀 + 32位随机字符（大小写字母、数字、-、_）
+func generateAPIKey() string {
+        const charset = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"
+        randBytes := make([]byte, 32)
+        rand.Read(randBytes)
+        key := make([]byte, 3+32)
+        key[0] = 't'
+        key[1] = 'k'
+        key[2] = '-'
+        for i := 0; i < 32; i++ {
+                key[3+i] = charset[int(randBytes[i])%len(charset)]
+        }
+        return string(key)
 }

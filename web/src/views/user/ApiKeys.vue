@@ -8,7 +8,7 @@
     </div>
 
     <el-alert type="info" :closable="false" style="margin-bottom: 16px;">
-      API密钥用于通过代理端口(11444)调用大模型API。请在请求的Authorization头中携带密钥：<code>Authorization: Bearer sk-xxxx</code>
+      API密钥用于通过代理端口(11444)调用大模型API。请在请求的Authorization头中携带密钥：<code>Authorization: Bearer tk-xxxx</code>
     </el-alert>
 
     <el-table :data="apiKeys" stripe>
@@ -47,10 +47,18 @@
     </el-table>
 
     <!-- 创建对话框 -->
-    <el-dialog v-model="createDialogVisible" title="创建API密钥" width="400px">
-      <el-form label-width="80px">
+    <el-dialog v-model="createDialogVisible" title="创建API密钥" width="520px">
+      <el-form label-width="100px">
         <el-form-item label="名称">
           <el-input v-model="newKeyName" placeholder="如: 生产环境密钥" />
+        </el-form-item>
+        <el-form-item label="API密钥">
+          <div class="key-generate-row">
+            <el-input v-model="newKeyValue" readonly class="key-input-readonly" />
+            <el-button type="primary" plain @click="regenerateKey">
+              <el-icon><Refresh /></el-icon> 重新生成
+            </el-button>
+          </div>
         </el-form-item>
       </el-form>
       <template #footer>
@@ -69,6 +77,23 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 const apiKeys = ref<any[]>([])
 const createDialogVisible = ref(false)
 const newKeyName = ref('')
+const newKeyValue = ref('')
+
+// 生成 tk- 前缀 + 32位随机字符（大小写字母、数字、-、_）
+const KEY_CHARS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_'
+function generateRandomKey(): string {
+  const arr = new Uint8Array(32)
+  crypto.getRandomValues(arr)
+  let result = 'tk-'
+  for (let i = 0; i < 32; i++) {
+    result += KEY_CHARS[arr[i] % KEY_CHARS.length]
+  }
+  return result
+}
+
+function regenerateKey() {
+  newKeyValue.value = generateRandomKey()
+}
 
 function maskKey(key: string): string {
   if (!key || key.length < 10) return key
@@ -91,12 +116,13 @@ async function fetchKeys() {
 
 function createKey() {
   newKeyName.value = ''
+  newKeyValue.value = generateRandomKey()
   createDialogVisible.value = true
 }
 
 async function submitCreate() {
   try {
-    await userApi.createApiKey({ name: newKeyName.value || undefined })
+    await userApi.createApiKey({ name: newKeyName.value || undefined, key: newKeyValue.value })
     ElMessage.success('密钥创建成功')
     createDialogVisible.value = false
     fetchKeys()
@@ -147,5 +173,20 @@ onMounted(() => {
   background: #f5f7fa;
   padding: 2px 8px;
   border-radius: 4px;
+}
+.key-generate-row {
+  display: flex;
+  gap: 8px;
+  width: 100%;
+}
+.key-input-readonly {
+  flex: 1;
+}
+.key-input-readonly :deep(.el-input__inner) {
+  font-family: 'Courier New', monospace;
+  font-size: 13px;
+  color: #606266;
+  cursor: default;
+  background: #f5f7fa;
 }
 </style>

@@ -56,7 +56,7 @@ export const dashboardApi = {
 // ==================== 用户接口 ====================
 export const userApi = {
   listApiKeys: () => api.get('/api-keys'),
-  createApiKey: (data: { name?: string }) => api.post('/api-keys', data),
+  createApiKey: (data: { name?: string; key?: string }) => api.post('/api-keys', data),
   deleteApiKey: (id: number) => api.delete(`/api-keys/${id}`),
   usage: (params: { time_filter: string; page?: number; page_size?: number }) => api.get('/usage', { params }),
   stats: (timeFilter: string) => api.get('/usage/stats', { params: { time_filter: timeFilter } }),
