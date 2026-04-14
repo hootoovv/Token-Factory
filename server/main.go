@@ -74,7 +74,7 @@ func main() {
 	}
 
 	// 8. 启动代理服务器 (:11444)
-	proxyServer := proxy.NewServer(cacheObj, recorder)
+	proxyServer := proxy.NewServer(cacheObj, recorder, &cfg.Proxy)
 	go func() {
 		if err := proxyServer.Start(cfg.ProxyListen); err != nil {
 			log.Fatalf("代理服务器启动失败: %v", err)

@@ -3,6 +3,7 @@ node_modules/
 dist/
 build/
 *.log
+*.exe
 
 # IDE
 .vscode/

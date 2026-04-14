@@ -23,3 +23,10 @@ admin:
 
 # JWT密钥（为空则自动生成，重启后旧Token失效）
 jwt_secret: ""
+
+# 代理策略配置
+proxy:
+  # 供应商选择策略: sequential(顺序优先) / round-robin(负载轮询,默认) / random(随机负载均衡)
+  provider_strategy: "round-robin"
+  # 会话亲和性: 启用后同一用户的同一模型请求优先使用上次成功的供应商，提升上游prompt缓存命中率
+  session_affinity: true

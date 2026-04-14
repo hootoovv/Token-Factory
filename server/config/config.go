@@ -14,6 +14,7 @@ type Config struct {
 	Database    DatabaseConfig `yaml:"database"`
 	Admin       AdminConfig    `yaml:"admin"`
 	JWTSecret   string         `yaml:"jwt_secret"`
+	Proxy       ProxyConfig    `yaml:"proxy"`
 }
 
 // DatabaseConfig 数据库配置
@@ -26,6 +27,12 @@ type DatabaseConfig struct {
 type AdminConfig struct {
 	Username string `yaml:"username"`
 	Password string `yaml:"password"`
+}
+
+// ProxyConfig 代理策略配置
+type ProxyConfig struct {
+	ProviderStrategy string `yaml:"provider_strategy"` // sequential / round-robin / random
+	SessionAffinity  bool   `yaml:"session_affinity"`  // 会话亲和性
 }
 
 // LoadConfig 加载配置文件，文件不存在则返回默认配置
@@ -64,6 +71,9 @@ func LoadConfig(path string) (*Config, error) {
 	if cfg.Admin.Password == "" {
 		cfg.Admin.Password = "admin123"
 	}
+	if cfg.Proxy.ProviderStrategy == "" {
+		cfg.Proxy.ProviderStrategy = "round-robin"
+	}
 
 	return cfg, nil
 }
@@ -81,5 +91,9 @@ func defaultConfig() *Config {
 			Password: "admin123",
 		},
 		JWTSecret: "",
+		Proxy: ProxyConfig{
+			ProviderStrategy: "round-robin",
+			SessionAffinity:  true,
+		},
 	}
 }
