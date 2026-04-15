@@ -7,19 +7,45 @@
         <p class="subtitle">企业级LLM API代理中心运行状态</p>
       </div>
       <div class="filter-bar">
-        <el-radio-group v-model="timeFilter" @change="fetchAllData" size="small">
+        <el-radio-group v-model="timeFilter" @change="onTimeFilterChange" size="small">
           <el-radio-button label="1h">1小时</el-radio-button>
           <el-radio-button label="today">今天</el-radio-button>
           <el-radio-button label="week">本周</el-radio-button>
           <el-radio-button label="month">本月</el-radio-button>
         </el-radio-group>
-        <el-select v-model="modelFilter" placeholder="全部模型" clearable size="small" style="width: 150px; margin-left: 12px;">
-          <el-option v-for="m in modelRanking" :key="m.id" :label="m.name" :value="m.id" />
+        <el-select
+          v-model="modelFilter"
+          placeholder="全部模型"
+          clearable
+          size="small"
+          style="width: 160px; margin-left: 12px;"
+          @change="onModelFilterChange"
+        >
+          <el-option v-for="m in allModels" :key="m.id" :label="m.name" :value="m.id" />
         </el-select>
-        <el-select v-model="providerFilter" placeholder="全部供应商" clearable size="small" style="width: 150px; margin-left: 12px;">
-          <el-option v-for="p in providerRanking" :key="p.id" :label="p.name" :value="p.id" />
+        <el-select
+          v-model="providerFilter"
+          placeholder="全部供应商"
+          clearable
+          size="small"
+          style="width: 160px; margin-left: 12px;"
+          @change="onProviderFilterChange"
+        >
+          <el-option v-for="p in allProviders" :key="p.id" :label="p.name" :value="p.id" />
         </el-select>
       </div>
+    </div>
+
+    <!-- 当前过滤提示 -->
+    <div v-if="modelFilter || providerFilter" class="filter-tip">
+      <span>已过滤：</span>
+      <el-tag v-if="modelFilter" closable size="small" @close="clearModelFilter">
+        模型: {{ getModelName(modelFilter) }}
+      </el-tag>
+      <el-tag v-if="providerFilter" closable size="small" type="warning" @close="clearProviderFilter" style="margin-left: 6px;">
+        供应商: {{ getProviderName(providerFilter) }}
+      </el-tag>
+      <el-button text size="small" @click="clearAllFilters" style="margin-left: 8px;">清除全部</el-button>
     </div>
 
     <!-- 统计卡片 -->
@@ -153,6 +179,10 @@ const timeFilter = ref('1h')
 const modelFilter = ref(null as number | null)
 const providerFilter = ref(null as number | null)
 
+// 所有模型/供应商列表（用于下拉框选项，不受过滤影响）
+const allModels = ref<any[]>([])
+const allProviders = ref<any[]>([])
+
 const stats = ref({
   total_calls: 0,
   total_input_bytes: 0,
@@ -164,9 +194,32 @@ const modelRanking = ref<any[]>([])
 const providerRanking = ref<any[]>([])
 const providerStatus = ref<any[]>([])
 
+// 获取模型/供应商列表（用于过滤下拉框）
+async function fetchFilterOptions() {
+  try {
+    const [modelsRes, providersRes] = await Promise.all([
+      dashboardApi.models(),
+      dashboardApi.providers(),
+    ])
+    allModels.value = modelsRes.data || []
+    allProviders.value = providersRes.data || []
+  } catch (e) {
+    console.error(e)
+  }
+}
+
+function getModelName(id: number): string {
+  return allModels.value.find(m => m.id === id)?.name || `#${id}`
+}
+
+function getProviderName(id: number): string {
+  return allProviders.value.find(p => p.id === id)?.name || `#${id}`
+}
+
+// 带过滤参数的数据获取
 async function fetchStats() {
   try {
-    const res = await dashboardApi.stats(timeFilter.value)
+    const res = await dashboardApi.stats(timeFilter.value, modelFilter.value, providerFilter.value)
     stats.value = res.data
   } catch (e) {
     console.error(e)
@@ -175,7 +228,7 @@ async function fetchStats() {
 
 async function fetchModelRanking() {
   try {
-    const res = await dashboardApi.modelRanking(timeFilter.value)
+    const res = await dashboardApi.modelRanking(timeFilter.value, modelFilter.value, providerFilter.value)
     modelRanking.value = res.data || []
   } catch (e) {
     console.error(e)
@@ -184,7 +237,7 @@ async function fetchModelRanking() {
 
 async function fetchProviderRanking() {
   try {
-    const res = await dashboardApi.providerRanking(timeFilter.value)
+    const res = await dashboardApi.providerRanking(timeFilter.value, modelFilter.value, providerFilter.value)
     providerRanking.value = res.data || []
   } catch (e) {
     console.error(e)
@@ -204,6 +257,35 @@ function fetchAllData() {
   fetchStats()
   fetchModelRanking()
   fetchProviderRanking()
+}
+
+// 过滤器变化处理
+function onTimeFilterChange() {
+  fetchAllData()
+}
+
+function onModelFilterChange() {
+  fetchAllData()
+}
+
+function onProviderFilterChange() {
+  fetchAllData()
+}
+
+function clearModelFilter() {
+  modelFilter.value = null
+  fetchAllData()
+}
+
+function clearProviderFilter() {
+  providerFilter.value = null
+  fetchAllData()
+}
+
+function clearAllFilters() {
+  modelFilter.value = null
+  providerFilter.value = null
+  fetchAllData()
 }
 
 function formatNumber(n: number): string {
@@ -241,6 +323,7 @@ function getStatusType(status: string): string {
 }
 
 onMounted(() => {
+  fetchFilterOptions()
   fetchAllData()
   fetchProviderStatus()
   // 自动刷新
@@ -278,6 +361,16 @@ onMounted(() => {
 .filter-bar {
   display: flex;
   align-items: center;
+}
+.filter-tip {
+  display: flex;
+  align-items: center;
+  margin-bottom: 16px;
+  padding: 8px 12px;
+  background: #f4f4f5;
+  border-radius: 6px;
+  font-size: 13px;
+  color: #606266;
 }
 .stats-row {
   margin-bottom: 20px;

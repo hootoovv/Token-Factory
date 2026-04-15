@@ -160,8 +160,26 @@ func (r *Recorder) flushBatch(items []TrafficItem) {
 	}
 }
 
+// FilterParams 过滤参数
+type FilterParams struct {
+	ModelID    uint
+	ProviderID uint
+}
+
+// buildWhereClause 构建公共 WHERE 子句
+func buildWhereClause(sinceStr string, filter FilterParams) string {
+	where := fmt.Sprintf("created_at >= '%s'", sinceStr)
+	if filter.ModelID > 0 {
+		where += fmt.Sprintf(" AND model_id = %d", filter.ModelID)
+	}
+	if filter.ProviderID > 0 {
+		where += fmt.Sprintf(" AND provider_id = %d", filter.ProviderID)
+	}
+	return where
+}
+
 // GetDashboardStats 获取Dashboard统计数据
-func GetDashboardStats(db *gorm.DB, since time.Time) (DashboardStats, error) {
+func GetDashboardStats(db *gorm.DB, since time.Time, filter FilterParams) (DashboardStats, error) {
 	tables, err := database.GetTrafficTables(db)
 	if err != nil {
 		return DashboardStats{}, err
@@ -174,6 +192,7 @@ func GetDashboardStats(db *gorm.DB, since time.Time) (DashboardStats, error) {
 	// 构建UNION ALL查询
 	var stats DashboardStats
 	sinceStr := since.Format("2006-01-02 15:04:05")
+	where := buildWhereClause(sinceStr, filter)
 
 	// 先获取总调用数
 	countSQL := ""
@@ -181,7 +200,7 @@ func GetDashboardStats(db *gorm.DB, since time.Time) (DashboardStats, error) {
 		if i > 0 {
 			countSQL += " UNION ALL "
 		}
-		countSQL += fmt.Sprintf("SELECT COUNT(*) as cnt, COALESCE(SUM(input_bytes),0) as ib, COALESCE(SUM(output_bytes),0) as ob, COALESCE(AVG(duration),0) as ad FROM %s WHERE created_at >= '%s'", table, sinceStr)
+		countSQL += fmt.Sprintf("SELECT COUNT(*) as cnt, COALESCE(SUM(input_bytes),0) as ib, COALESCE(SUM(output_bytes),0) as ob, COALESCE(AVG(duration),0) as ad FROM %s WHERE %s", table, where)
 	}
 
 	// 聚合所有表的结果
@@ -209,30 +228,31 @@ func GetDashboardStats(db *gorm.DB, since time.Time) (DashboardStats, error) {
 }
 
 // GetModelRanking 获取模型使用排行
-func GetModelRanking(db *gorm.DB, since time.Time, limit int) ([]RankingItem, error) {
+func GetModelRanking(db *gorm.DB, since time.Time, limit int, filter FilterParams) ([]RankingItem, error) {
 	tables, err := database.GetTrafficTables(db)
 	if err != nil || len(tables) == 0 {
 		return nil, err
 	}
 
 	sinceStr := since.Format("2006-01-02 15:04:05")
+	where := buildWhereClause(sinceStr, filter)
 
 	unionSQL := ""
 	for i, table := range tables {
 		if i > 0 {
 			unionSQL += " UNION ALL "
 		}
-		unionSQL += fmt.Sprintf("SELECT model_id, COUNT(*) as cnt, COALESCE(SUM(input_bytes),0) as ib, COALESCE(SUM(output_bytes),0) as ob FROM %s WHERE created_at >= '%s' GROUP BY model_id", table, sinceStr)
+		unionSQL += fmt.Sprintf("SELECT model_id, COUNT(*) as cnt, COALESCE(SUM(input_bytes),0) as ib, COALESCE(SUM(output_bytes),0) as ob FROM %s WHERE %s GROUP BY model_id", table, where)
 	}
 
 	aggSQL := fmt.Sprintf(`
-		SELECT t.model_id as id, m.name, SUM(t.cnt) as count, SUM(t.ib) as input_bytes, SUM(t.ob) as output_bytes
-		FROM (%s) t
-		LEFT JOIN models m ON m.id = t.model_id
-		GROUP BY t.model_id, m.name
-		ORDER BY count DESC
-		LIMIT %d
-	`, unionSQL, limit)
+                SELECT t.model_id as id, m.name, SUM(t.cnt) as count, SUM(t.ib) as input_bytes, SUM(t.ob) as output_bytes
+                FROM (%s) t
+                LEFT JOIN models m ON m.id = t.model_id
+                GROUP BY t.model_id, m.name
+                ORDER BY count DESC
+                LIMIT %d
+        `, unionSQL, limit)
 
 	var items []RankingItem
 	if err := db.Raw(aggSQL).Scan(&items).Error; err != nil {
@@ -242,30 +262,31 @@ func GetModelRanking(db *gorm.DB, since time.Time, limit int) ([]RankingItem, er
 }
 
 // GetProviderRanking 获取供应商使用排行
-func GetProviderRanking(db *gorm.DB, since time.Time, limit int) ([]RankingItem, error) {
+func GetProviderRanking(db *gorm.DB, since time.Time, limit int, filter FilterParams) ([]RankingItem, error) {
 	tables, err := database.GetTrafficTables(db)
 	if err != nil || len(tables) == 0 {
 		return nil, err
 	}
 
 	sinceStr := since.Format("2006-01-02 15:04:05")
+	where := buildWhereClause(sinceStr, filter)
 
 	unionSQL := ""
 	for i, table := range tables {
 		if i > 0 {
 			unionSQL += " UNION ALL "
 		}
-		unionSQL += fmt.Sprintf("SELECT provider_id, COUNT(*) as cnt, COALESCE(SUM(input_bytes),0) as ib, COALESCE(SUM(output_bytes),0) as ob FROM %s WHERE created_at >= '%s' GROUP BY provider_id", table, sinceStr)
+		unionSQL += fmt.Sprintf("SELECT provider_id, COUNT(*) as cnt, COALESCE(SUM(input_bytes),0) as ib, COALESCE(SUM(output_bytes),0) as ob FROM %s WHERE %s GROUP BY provider_id", table, where)
 	}
 
 	aggSQL := fmt.Sprintf(`
-		SELECT t.provider_id as id, p.name, SUM(t.cnt) as count, SUM(t.ib) as input_bytes, SUM(t.ob) as output_bytes
-		FROM (%s) t
-		LEFT JOIN providers p ON p.id = t.provider_id
-		GROUP BY t.provider_id, p.name
-		ORDER BY count DESC
-		LIMIT %d
-	`, unionSQL, limit)
+                SELECT t.provider_id as id, p.name, SUM(t.cnt) as count, SUM(t.ib) as input_bytes, SUM(t.ob) as output_bytes
+                FROM (%s) t
+                LEFT JOIN providers p ON p.id = t.provider_id
+                GROUP BY t.provider_id, p.name
+                ORDER BY count DESC
+                LIMIT %d
+        `, unionSQL, limit)
 
 	var items []RankingItem
 	if err := db.Raw(aggSQL).Scan(&items).Error; err != nil {
@@ -336,13 +357,13 @@ func GetUserTrafficRecords(db *gorm.DB, userID uint, since time.Time, page, page
 	// 查询记录
 	offset := (page - 1) * pageSize
 	querySQL := fmt.Sprintf(`
-		SELECT t.*, m.name as model_name, p.name as provider_name
-		FROM (%s) t
-		LEFT JOIN models m ON m.id = t.model_id
-		LEFT JOIN providers p ON p.id = t.provider_id
-		ORDER BY t.created_at DESC
-		LIMIT %d OFFSET %d
-	`, countSQL, pageSize, offset)
+                SELECT t.*, m.name as model_name, p.name as provider_name
+                FROM (%s) t
+                LEFT JOIN models m ON m.id = t.model_id
+                LEFT JOIN providers p ON p.id = t.provider_id
+                ORDER BY t.created_at DESC
+                LIMIT %d OFFSET %d
+        `, countSQL, pageSize, offset)
 
 	var records []map[string]interface{}
 	if err := db.Raw(querySQL).Scan(&records).Error; err != nil {

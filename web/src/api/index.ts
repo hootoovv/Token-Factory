@@ -47,10 +47,27 @@ export const authApi = {
 
 // ==================== Dashboard（公开） ====================
 export const dashboardApi = {
-  stats: (timeFilter: string) => api.get('/dashboard/stats', { params: { time_filter: timeFilter } }),
-  modelRanking: (timeFilter: string) => api.get('/dashboard/model-ranking', { params: { time_filter: timeFilter } }),
-  providerRanking: (timeFilter: string) => api.get('/dashboard/provider-ranking', { params: { time_filter: timeFilter } }),
+  stats: (timeFilter: string, modelId?: number | null, providerId?: number | null) => {
+    const params: Record<string, string> = { time_filter: timeFilter }
+    if (modelId) params.model_id = String(modelId)
+    if (providerId) params.provider_id = String(providerId)
+    return api.get('/dashboard/stats', { params })
+  },
+  modelRanking: (timeFilter: string, modelId?: number | null, providerId?: number | null) => {
+    const params: Record<string, string> = { time_filter: timeFilter }
+    if (modelId) params.model_id = String(modelId)
+    if (providerId) params.provider_id = String(providerId)
+    return api.get('/dashboard/model-ranking', { params })
+  },
+  providerRanking: (timeFilter: string, modelId?: number | null, providerId?: number | null) => {
+    const params: Record<string, string> = { time_filter: timeFilter }
+    if (modelId) params.model_id = String(modelId)
+    if (providerId) params.provider_id = String(providerId)
+    return api.get('/dashboard/provider-ranking', { params })
+  },
   providerStatus: () => api.get('/dashboard/provider-status'),
+  models: () => api.get('/dashboard/models'),
+  providers: () => api.get('/dashboard/providers'),
 }
 
 // ==================== 用户接口 ====================

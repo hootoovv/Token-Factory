@@ -63,6 +63,8 @@ func (s *Server) Start(addr string) error {
 		api.GET("/dashboard/model-ranking", s.handleModelRanking)
 		api.GET("/dashboard/provider-ranking", s.handleProviderRanking)
 		api.GET("/dashboard/provider-status", s.handleProviderStatus)
+		api.GET("/dashboard/models", s.handleDashboardModels)
+		api.GET("/dashboard/providers", s.handleDashboardProviders)
 
 		// 需要认证的接口
 		auth := api.Group("")
@@ -220,7 +222,8 @@ func (s *Server) handleLogin(c *gin.Context) {
 // handleDashboardStats Dashboard统计（公开）
 func (s *Server) handleDashboardStats(c *gin.Context) {
 	since := s.parseSince(c)
-	stats, err := traffic.GetDashboardStats(s.db, since)
+	filter := s.parseDashboardFilter(c)
+	stats, err := traffic.GetDashboardStats(s.db, since, filter)
 	if err != nil {
 		c.JSON(500, gin.H{"error": err.Error()})
 		return
@@ -231,7 +234,8 @@ func (s *Server) handleDashboardStats(c *gin.Context) {
 // handleModelRanking 模型使用排行（公开）
 func (s *Server) handleModelRanking(c *gin.Context) {
 	since := s.parseSince(c)
-	ranking, err := traffic.GetModelRanking(s.db, since, 10)
+	filter := s.parseDashboardFilter(c)
+	ranking, err := traffic.GetModelRanking(s.db, since, 10, filter)
 	if err != nil {
 		c.JSON(500, gin.H{"error": err.Error()})
 		return
@@ -242,7 +246,8 @@ func (s *Server) handleModelRanking(c *gin.Context) {
 // handleProviderRanking 供应商使用排行（公开）
 func (s *Server) handleProviderRanking(c *gin.Context) {
 	since := s.parseSince(c)
-	ranking, err := traffic.GetProviderRanking(s.db, since, 10)
+	filter := s.parseDashboardFilter(c)
+	ranking, err := traffic.GetProviderRanking(s.db, since, 10, filter)
 	if err != nil {
 		c.JSON(500, gin.H{"error": err.Error()})
 		return
@@ -690,14 +695,14 @@ func (s *Server) handleDeleteModelProvider(c *gin.Context) {
 func (s *Server) handleAdminStats(c *gin.Context) {
 	since := s.parseSince(c)
 
-	stats, err := traffic.GetDashboardStats(s.db, since)
+	stats, err := traffic.GetDashboardStats(s.db, since, traffic.FilterParams{})
 	if err != nil {
 		c.JSON(500, gin.H{"error": err.Error()})
 		return
 	}
 
-	modelRanking, _ := traffic.GetModelRanking(s.db, since, 10)
-	providerRanking, _ := traffic.GetProviderRanking(s.db, since, 10)
+	modelRanking, _ := traffic.GetModelRanking(s.db, since, 10, traffic.FilterParams{})
+	providerRanking, _ := traffic.GetProviderRanking(s.db, since, 10, traffic.FilterParams{})
 
 	c.JSON(200, gin.H{
 		"stats":            stats,
@@ -732,6 +737,31 @@ func (s *Server) parseSince(c *gin.Context) time.Time {
 	default:
 		return time.Now().Add(-1 * time.Hour)
 	}
+}
+
+func (s *Server) parseDashboardFilter(c *gin.Context) traffic.FilterParams {
+	var filter traffic.FilterParams
+	if mid := c.Query("model_id"); mid != "" {
+		fmt.Sscanf(mid, "%d", &filter.ModelID)
+	}
+	if pid := c.Query("provider_id"); pid != "" {
+		fmt.Sscanf(pid, "%d", &filter.ProviderID)
+	}
+	return filter
+}
+
+// handleDashboardModels 获取模型列表（公开，用于Dashboard过滤）
+func (s *Server) handleDashboardModels(c *gin.Context) {
+	var models []database.Model
+	s.db.Select("id, name").Order("id ASC").Find(&models)
+	c.JSON(200, models)
+}
+
+// handleDashboardProviders 获取供应商列表（公开，用于Dashboard过滤）
+func (s *Server) handleDashboardProviders(c *gin.Context) {
+	var providers []database.Provider
+	s.db.Select("id, name").Order("id ASC").Find(&providers)
+	c.JSON(200, providers)
 }
 
 func (s *Server) getPage(c *gin.Context) int {
