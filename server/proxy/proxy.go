@@ -15,6 +15,13 @@ import (
 	"token_factory/traffic"
 )
 
+// 常量定义
+const (
+	MaxRequestBodySize   = 50 * 1024 * 1024 // 2.9 修复：请求体最大50MB
+	MaxProviderAttempts  = 3                 // 最大供应商尝试次数
+	DefaultProxyTimeout  = 30 * time.Second  // 默认代理超时
+)
+
 // Server API代理转发服务器
 type Server struct {
 	cache    *cache.Cache
@@ -132,8 +139,8 @@ func (s *Server) handleProxy(w http.ResponseWriter, r *http.Request) {
 	var resp *http.Response
 	var inputBytes int64
 
-	// 读取请求体
-	bodyBytes, err := io.ReadAll(r.Body)
+	// 2.9 修复：添加请求体大小限制，防止OOM攻击
+	bodyBytes, err := io.ReadAll(io.LimitReader(r.Body, MaxRequestBodySize))
 	if err != nil {
 		http.Error(w, `{"error":{"message":"Failed to read request body","type":"request_error"}}`, http.StatusBadRequest)
 		return
@@ -142,7 +149,7 @@ func (s *Server) handleProxy(w http.ResponseWriter, r *http.Request) {
 	r.Body.Close()
 
 	for attempt, provider := range orderedProviders {
-		if attempt >= 3 { // 最多尝试3个供应商
+		if attempt >= MaxProviderAttempts {
 			break
 		}
 
@@ -177,7 +184,7 @@ func (s *Server) handleProxy(w http.ResponseWriter, r *http.Request) {
 		// 发送请求（带超时）
 		timeout := time.Duration(provider.Timeout) * time.Second
 		if timeout == 0 {
-			timeout = 30 * time.Second
+			timeout = DefaultProxyTimeout
 		}
 		client := &http.Client{Timeout: timeout}
 
@@ -362,16 +369,15 @@ func (s *Server) handleOllamaTags(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(resp)
 }
 
+// 2.7 修复：移除URL参数传递API Key的方式，仅支持Authorization头
 // extractAPIKey 从请求中提取API-Key
 func extractAPIKey(r *http.Request) string {
-	apiKey := r.Header.Get("Authorization")
-	if apiKey == "" {
-		apiKey = r.URL.Query().Get("key")
-	} else {
-		apiKey = strings.TrimPrefix(apiKey, "Bearer ")
-		apiKey = strings.TrimSpace(apiKey)
+	authHeader := r.Header.Get("Authorization")
+	if authHeader == "" {
+		return ""
 	}
-	return apiKey
+	apiKey := strings.TrimPrefix(authHeader, "Bearer ")
+	return strings.TrimSpace(apiKey)
 }
 
 // extractModelName 从请求中提取模型名称
@@ -386,8 +392,8 @@ func (s *Server) extractModelName(r *http.Request) string {
 
 		// 从请求体中提取model字段
 		if r.Method == "POST" && r.Body != nil {
-			// 简单提取 "model":"xxx" 字段
-			bodyBytes, err := io.ReadAll(r.Body)
+			// 2.9 修复：添加请求体大小限制
+			bodyBytes, err := io.ReadAll(io.LimitReader(r.Body, MaxRequestBodySize))
 			if err == nil {
 				r.Body = io.NopCloser(strings.NewReader(string(bodyBytes)))
 				modelName := extractModelFromJSON(bodyBytes)
@@ -406,34 +412,14 @@ func (s *Server) extractModelName(r *http.Request) string {
 	return ""
 }
 
+// 2.8 修复：使用encoding/json标准库替代手动JSON解析
 // extractModelFromJSON 从JSON体中提取model字段
 func extractModelFromJSON(data []byte) string {
-	str := string(data)
-	// 简单提取 "model":"xxx" 或 "model": "xxx"
-	idx := strings.Index(str, `"model"`)
-	if idx == -1 {
+	var body struct {
+		Model string `json:"model"`
+	}
+	if err := json.Unmarshal(data, &body); err != nil {
 		return ""
 	}
-
-	// 找到冒号
-	rest := str[idx+7:]
-	colonIdx := strings.Index(rest, ":")
-	if colonIdx == -1 || colonIdx > 5 {
-		return ""
-	}
-	rest = rest[colonIdx+1:]
-
-	// 跳过空格
-	rest = strings.TrimSpace(rest)
-
-	// 提取引号内的字符串
-	if len(rest) == 0 || rest[0] != '"' {
-		return ""
-	}
-	endQuote := strings.Index(rest[1:], `"`)
-	if endQuote == -1 {
-		return ""
-	}
-
-	return rest[1 : endQuote+1]
+	return body.Model
 }

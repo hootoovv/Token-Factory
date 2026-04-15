@@ -166,16 +166,24 @@ type FilterParams struct {
 	ProviderID uint
 }
 
-// buildWhereClause 构建公共 WHERE 子句
-func buildWhereClause(sinceStr string, filter FilterParams) string {
-	where := fmt.Sprintf("created_at >= '%s'", sinceStr)
+// buildWhereClause 构建公共 WHERE 子句（参数化查询，防止SQL注入）
+func buildWhereClause(since time.Time, filter FilterParams) (string, []interface{}) {
+	where := "created_at >= ?"
+	args := []interface{}{since}
 	if filter.ModelID > 0 {
-		where += fmt.Sprintf(" AND model_id = %d", filter.ModelID)
+		where += " AND model_id = ?"
+		args = append(args, filter.ModelID)
 	}
 	if filter.ProviderID > 0 {
-		where += fmt.Sprintf(" AND provider_id = %d", filter.ProviderID)
+		where += " AND provider_id = ?"
+		args = append(args, filter.ProviderID)
 	}
-	return where
+	return where, args
+}
+
+// buildUserWhereClause 构建用户相关的 WHERE 子句（参数化查询，防止SQL注入）
+func buildUserWhereClause(userID uint, since time.Time) (string, []interface{}) {
+	return "user_id = ? AND created_at >= ?", []interface{}{userID, since}
 }
 
 // GetDashboardStats 获取Dashboard统计数据
@@ -189,18 +197,18 @@ func GetDashboardStats(db *gorm.DB, since time.Time, filter FilterParams) (Dashb
 		return DashboardStats{}, nil
 	}
 
-	// 构建UNION ALL查询
-	var stats DashboardStats
-	sinceStr := since.Format("2006-01-02 15:04:05")
-	where := buildWhereClause(sinceStr, filter)
+	// 构建参数化查询
+	where, args := buildWhereClause(since, filter)
 
-	// 先获取总调用数
+	// 构建UNION ALL查询
 	countSQL := ""
+	allArgs := []interface{}{}
 	for i, table := range tables {
 		if i > 0 {
 			countSQL += " UNION ALL "
 		}
 		countSQL += fmt.Sprintf("SELECT COUNT(*) as cnt, COALESCE(SUM(input_bytes),0) as ib, COALESCE(SUM(output_bytes),0) as ob, COALESCE(AVG(duration),0) as ad FROM %s WHERE %s", table, where)
+		allArgs = append(allArgs, args...)
 	}
 
 	// 聚合所有表的结果
@@ -213,11 +221,11 @@ func GetDashboardStats(db *gorm.DB, since time.Time, filter FilterParams) (Dashb
 		AvgDur      float64
 	}
 
-	if err := db.Raw(aggSQL).Scan(&result).Error; err != nil {
+	if err := db.Raw(aggSQL, allArgs...).Scan(&result).Error; err != nil {
 		return DashboardStats{}, err
 	}
 
-	stats = DashboardStats{
+	stats := DashboardStats{
 		TotalCalls:       result.TotalCalls,
 		TotalInputBytes:  result.TotalInput,
 		TotalOutputBytes: result.TotalOutput,
@@ -234,28 +242,29 @@ func GetModelRanking(db *gorm.DB, since time.Time, limit int, filter FilterParam
 		return nil, err
 	}
 
-	sinceStr := since.Format("2006-01-02 15:04:05")
-	where := buildWhereClause(sinceStr, filter)
+	where, args := buildWhereClause(since, filter)
 
 	unionSQL := ""
+	allArgs := []interface{}{}
 	for i, table := range tables {
 		if i > 0 {
 			unionSQL += " UNION ALL "
 		}
 		unionSQL += fmt.Sprintf("SELECT model_id, COUNT(*) as cnt, COALESCE(SUM(input_bytes),0) as ib, COALESCE(SUM(output_bytes),0) as ob FROM %s WHERE %s GROUP BY model_id", table, where)
+		allArgs = append(allArgs, args...)
 	}
 
 	aggSQL := fmt.Sprintf(`
-                SELECT t.model_id as id, m.name, SUM(t.cnt) as count, SUM(t.ib) as input_bytes, SUM(t.ob) as output_bytes
-                FROM (%s) t
-                LEFT JOIN models m ON m.id = t.model_id
-                GROUP BY t.model_id, m.name
-                ORDER BY count DESC
-                LIMIT %d
-        `, unionSQL, limit)
+		SELECT t.model_id as id, m.name, SUM(t.cnt) as count, SUM(t.ib) as input_bytes, SUM(t.ob) as output_bytes
+		FROM (%s) t
+		LEFT JOIN models m ON m.id = t.model_id
+		GROUP BY t.model_id, m.name
+		ORDER BY count DESC
+		LIMIT %d
+	`, unionSQL, limit)
 
 	var items []RankingItem
-	if err := db.Raw(aggSQL).Scan(&items).Error; err != nil {
+	if err := db.Raw(aggSQL, allArgs...).Scan(&items).Error; err != nil {
 		return nil, err
 	}
 	return items, nil
@@ -268,28 +277,29 @@ func GetProviderRanking(db *gorm.DB, since time.Time, limit int, filter FilterPa
 		return nil, err
 	}
 
-	sinceStr := since.Format("2006-01-02 15:04:05")
-	where := buildWhereClause(sinceStr, filter)
+	where, args := buildWhereClause(since, filter)
 
 	unionSQL := ""
+	allArgs := []interface{}{}
 	for i, table := range tables {
 		if i > 0 {
 			unionSQL += " UNION ALL "
 		}
 		unionSQL += fmt.Sprintf("SELECT provider_id, COUNT(*) as cnt, COALESCE(SUM(input_bytes),0) as ib, COALESCE(SUM(output_bytes),0) as ob FROM %s WHERE %s GROUP BY provider_id", table, where)
+		allArgs = append(allArgs, args...)
 	}
 
 	aggSQL := fmt.Sprintf(`
-                SELECT t.provider_id as id, p.name, SUM(t.cnt) as count, SUM(t.ib) as input_bytes, SUM(t.ob) as output_bytes
-                FROM (%s) t
-                LEFT JOIN providers p ON p.id = t.provider_id
-                GROUP BY t.provider_id, p.name
-                ORDER BY count DESC
-                LIMIT %d
-        `, unionSQL, limit)
+		SELECT t.provider_id as id, p.name, SUM(t.cnt) as count, SUM(t.ib) as input_bytes, SUM(t.ob) as output_bytes
+		FROM (%s) t
+		LEFT JOIN providers p ON p.id = t.provider_id
+		GROUP BY t.provider_id, p.name
+		ORDER BY count DESC
+		LIMIT %d
+	`, unionSQL, limit)
 
 	var items []RankingItem
-	if err := db.Raw(aggSQL).Scan(&items).Error; err != nil {
+	if err := db.Raw(aggSQL, allArgs...).Scan(&items).Error; err != nil {
 		return nil, err
 	}
 	return items, nil
@@ -302,14 +312,16 @@ func GetUserStats(db *gorm.DB, userID uint, since time.Time) (DashboardStats, er
 		return DashboardStats{}, err
 	}
 
-	sinceStr := since.Format("2006-01-02 15:04:05")
+	where, args := buildUserWhereClause(userID, since)
 
 	countSQL := ""
+	allArgs := []interface{}{}
 	for i, table := range tables {
 		if i > 0 {
 			countSQL += " UNION ALL "
 		}
-		countSQL += fmt.Sprintf("SELECT COUNT(*) as cnt, COALESCE(SUM(input_bytes),0) as ib, COALESCE(SUM(output_bytes),0) as ob, COALESCE(AVG(duration),0) as ad FROM %s WHERE user_id = %d AND created_at >= '%s'", table, userID, sinceStr)
+		countSQL += fmt.Sprintf("SELECT COUNT(*) as cnt, COALESCE(SUM(input_bytes),0) as ib, COALESCE(SUM(output_bytes),0) as ob, COALESCE(AVG(duration),0) as ad FROM %s WHERE %s", table, where)
+		allArgs = append(allArgs, args...)
 	}
 
 	aggSQL := fmt.Sprintf("SELECT SUM(cnt) as total_calls, SUM(ib) as total_input, SUM(ob) as total_output, CASE WHEN SUM(cnt)>0 THEN SUM(cnt*ad)/SUM(cnt) ELSE 0 END as avg_dur FROM (%s) t", countSQL)
@@ -321,7 +333,7 @@ func GetUserStats(db *gorm.DB, userID uint, since time.Time) (DashboardStats, er
 		AvgDur      float64
 	}
 
-	if err := db.Raw(aggSQL).Scan(&result).Error; err != nil {
+	if err := db.Raw(aggSQL, allArgs...).Scan(&result).Error; err != nil {
 		return DashboardStats{}, err
 	}
 
@@ -340,33 +352,35 @@ func GetUserTrafficRecords(db *gorm.DB, userID uint, since time.Time, page, page
 		return nil, 0, err
 	}
 
-	sinceStr := since.Format("2006-01-02 15:04:05")
+	where, args := buildUserWhereClause(userID, since)
 
 	// 先统计总数
 	countSQL := ""
+	allArgs := []interface{}{}
 	for i, table := range tables {
 		if i > 0 {
 			countSQL += " UNION ALL "
 		}
-		countSQL += fmt.Sprintf("SELECT * FROM %s WHERE user_id = %d AND created_at >= '%s'", table, userID, sinceStr)
+		countSQL += fmt.Sprintf("SELECT * FROM %s WHERE %s", table, where)
+		allArgs = append(allArgs, args...)
 	}
 
 	var total int64
-	db.Raw(fmt.Sprintf("SELECT COUNT(*) FROM (%s) t", countSQL)).Scan(&total)
+	db.Raw(fmt.Sprintf("SELECT COUNT(*) FROM (%s) t", countSQL), allArgs...).Scan(&total)
 
 	// 查询记录
 	offset := (page - 1) * pageSize
 	querySQL := fmt.Sprintf(`
-                SELECT t.*, m.name as model_name, p.name as provider_name
-                FROM (%s) t
-                LEFT JOIN models m ON m.id = t.model_id
-                LEFT JOIN providers p ON p.id = t.provider_id
-                ORDER BY t.created_at DESC
-                LIMIT %d OFFSET %d
-        `, countSQL, pageSize, offset)
+		SELECT t.*, m.name as model_name, p.name as provider_name
+		FROM (%s) t
+		LEFT JOIN models m ON m.id = t.model_id
+		LEFT JOIN providers p ON p.id = t.provider_id
+		ORDER BY t.created_at DESC
+		LIMIT %d OFFSET %d
+	`, countSQL, pageSize, offset)
 
 	var records []map[string]interface{}
-	if err := db.Raw(querySQL).Scan(&records).Error; err != nil {
+	if err := db.Raw(querySQL, allArgs...).Scan(&records).Error; err != nil {
 		return nil, 0, err
 	}
 
