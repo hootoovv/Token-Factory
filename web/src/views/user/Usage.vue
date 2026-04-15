@@ -40,14 +40,10 @@
       </el-table-column>
     </el-table>
 
-    <div class="pagination-bar" v-if="total > 0">
-      <el-pagination
-        v-model:current-page="page"
-        v-model:page-size="pageSize"
-        :total="total"
-        layout="total, prev, pager, next"
-        @current-change="fetchData"
-      />
+    <div class="pagination-wrapper" v-if="total > 0">
+      <el-pagination v-model:current-page="page" v-model:page-size="pageSize" :total="total"
+        :page-sizes="[10, 20, 50, 100]" layout="total, sizes, prev, pager, next" @size-change="fetchData"
+        @current-change="fetchData" />
     </div>
   </div>
 </template>
@@ -105,16 +101,19 @@ onMounted(() => {
   align-items: center;
   margin-bottom: 20px;
 }
+
 .page-header h3 {
   margin: 0;
 }
+
 .filter-bar {
   display: flex;
   align-items: center;
 }
-.pagination-bar {
-  margin-top: 16px;
+
+.pagination-wrapper {
   display: flex;
-  justify-content: center;
+  justify-content: flex-end;
+  margin-top: 16px;
 }
 </style>

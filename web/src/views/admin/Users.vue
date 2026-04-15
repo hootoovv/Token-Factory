@@ -3,7 +3,9 @@
     <div class="page-header">
       <h3>用户管理</h3>
       <el-button type="primary" @click="showCreateDialog">
-        <el-icon><Plus /></el-icon> 新建用户
+        <el-icon>
+          <Plus />
+        </el-icon> 新建用户
       </el-button>
     </div>
 
@@ -27,10 +29,17 @@
         <template #default="scope">
           <el-button size="small" @click="editUser(scope.row)">编辑</el-button>
           <el-button size="small" type="warning" @click="resetPassword(scope.row)">重置密码</el-button>
-          <el-button size="small" type="danger" @click="deleteUser(scope.row)" :disabled="scope.row.role === 'admin'">删除</el-button>
+          <el-button size="small" type="danger" @click="deleteUser(scope.row)"
+            :disabled="scope.row.role === 'admin'">删除</el-button>
         </template>
       </el-table-column>
     </el-table>
+
+    <div class="pagination-wrapper">
+      <el-pagination v-model:current-page="currentPage" v-model:page-size="pageSize" :total="total"
+        :page-sizes="[10, 20, 50, 100]" layout="total, sizes, prev, pager, next" @size-change="fetchUsers"
+        @current-change="fetchUsers" />
+    </div>
 
     <!-- 创建/编辑对话框 -->
     <el-dialog v-model="dialogVisible" :title="isEdit ? '编辑用户' : '新建用户'" width="480px">
@@ -79,6 +88,9 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import type { FormInstance } from 'element-plus'
 
 const users = ref<any[]>([])
+const currentPage = ref(1)
+const pageSize = ref(20)
+const total = ref(0)
 const dialogVisible = ref(false)
 const resetDialogVisible = ref(false)
 const isEdit = ref(false)
@@ -109,8 +121,9 @@ function formatDate(d: string): string {
 
 async function fetchUsers() {
   try {
-    const res = await adminUserApi.list()
-    users.value = res.data || []
+    const res = await adminUserApi.list({ page: currentPage.value, page_size: pageSize.value })
+    users.value = res.data.items || []
+    total.value = res.data.total || 0
   } catch (e) {
     console.error(e)
   }
@@ -203,7 +216,14 @@ onMounted(() => {
   align-items: center;
   margin-bottom: 20px;
 }
+
 .page-header h3 {
   margin: 0;
+}
+
+.pagination-wrapper {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 16px;
 }
 </style>

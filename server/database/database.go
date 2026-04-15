@@ -26,13 +26,13 @@ const EncryptedPrefix = "enc:"
 
 // Provider 供应商模型
 type Provider struct {
-	ID          uint      `gorm:"primaryKey" json:"id"`
+	ID	    uint      `gorm:"primaryKey" json:"id"`
 	Name        string    `gorm:"uniqueIndex;size:100;not null" json:"name"`
 	Description string    `gorm:"size:500" json:"description"`
 	BaseURL     string    `gorm:"column:base_url;size:500;not null" json:"base_url"`
 	APIKey      string    `gorm:"column:api_key;size:500" json:"api_key"`
-	Timeout     int       `gorm:"default:30" json:"timeout"`            // 超时秒数
-	Retry       int       `gorm:"default:3" json:"retry"`               // 重试次数
+	Timeout     int       `gorm:"default:30" json:"timeout"`	    // 超时秒数
+	Retry       int       `gorm:"default:3" json:"retry"`   	    // 重试次数
 	Status      string    `gorm:"size:20;default:active" json:"status"` // active/cooldown/arrears
 	CreatedAt   time.Time `json:"created_at"`
 	UpdatedAt   time.Time `json:"updated_at"`
@@ -40,7 +40,7 @@ type Provider struct {
 
 // Model 模型定义
 type Model struct {
-	ID          uint      `gorm:"primaryKey" json:"id"`
+	ID	    uint      `gorm:"primaryKey" json:"id"`
 	Name        string    `gorm:"uniqueIndex;size:100;not null" json:"name"`
 	Description string    `gorm:"size:500" json:"description"`
 	CreatedAt   time.Time `json:"created_at"`
@@ -49,19 +49,19 @@ type Model struct {
 
 // ModelProvider 模型-供应商映射
 type ModelProvider struct {
-	ID                uint      `gorm:"primaryKey" json:"id"`
-	ModelID           uint      `gorm:"index;not null" json:"model_id"`
-	ProviderID        uint      `gorm:"index;not null" json:"provider_id"`
+	ID		  uint      `gorm:"primaryKey" json:"id"`
+	ModelID 	  uint      `gorm:"index;not null" json:"model_id"`
+	ProviderID	  uint      `gorm:"index;not null" json:"provider_id"`
 	ProviderModelName string    `gorm:"size:100;not null" json:"provider_model_name"` // 供应商侧的模型名
-	CreatedAt         time.Time `json:"created_at"`
-	UpdatedAt         time.Time `json:"updated_at"`
+	CreatedAt	  time.Time `json:"created_at"`
+	UpdatedAt	  time.Time `json:"updated_at"`
 }
 
 // User 用户
 type User struct {
-	ID          uint      `gorm:"primaryKey" json:"id"`
+	ID	    uint      `gorm:"primaryKey" json:"id"`
 	Username    string    `gorm:"uniqueIndex;size:100;not null" json:"username"`
-	Password    string    `gorm:"size:200;not null" json:"-"`       // JSON输出时隐藏
+	Password    string    `gorm:"size:200;not null" json:"-"`	// JSON输出时隐藏
 	Role        string    `gorm:"size:20;default:user" json:"role"` // admin/user
 	DisplayName string    `gorm:"size:100" json:"display_name"`
 	CreatedAt   time.Time `json:"created_at"`
@@ -70,18 +70,31 @@ type User struct {
 
 // APIKey API密钥
 type APIKey struct {
-	ID        uint      `gorm:"primaryKey" json:"id"`
+	ID	  uint      `gorm:"primaryKey" json:"id"`
 	UserID    uint      `gorm:"index;not null" json:"user_id"`
-	Key       string    `gorm:"uniqueIndex;size:100;not null" json:"key"`
+	Key	  string    `gorm:"uniqueIndex;size:100;not null" json:"key"`
 	Name      string    `gorm:"size:100" json:"name"`
 	Status    string    `gorm:"size:20;default:active" json:"status"` // active/disabled
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
 }
 
+// AuditLog 7.1	审计日志：记录所有管理操作，便于安全事件追溯
+type AuditLog struct {
+	ID	     uint      `gorm:"primaryKey" json:"id"`
+	OperatorID   uint      `gorm:"index;not null" json:"operator_id"`     // 操作者用户ID
+	OperatorName string    `gorm:"size:100;not null" json:"operator_name"` // 操作者用户名
+	Action       string    `gorm:"size:50;index;not null" json:"action"`  // 操作类型：create/delete/update/login等
+	TargetType   string    `gorm:"size:50;index;not null" json:"target_type"` // 操作对象类型：api_key/user/provider/model等
+	TargetID     string    `gorm:"size:100;index" json:"target_id"`       // 操作对象ID
+	Detail       string    `gorm:"size:500" json:"detail"`  	      // 操作详情
+	IPAddress    string    `gorm:"size:50" json:"ip_address"`	      // 操作者IP地址
+	CreatedAt    time.Time `gorm:"index" json:"created_at"`
+}
+
 // TrafficRecord 流量记录（基础表结构，实际存储在按月分表中）
 type TrafficRecord struct {
-	ID          uint      `gorm:"primaryKey" json:"id"`
+	ID	    uint      `gorm:"primaryKey" json:"id"`
 	APIKeyID    uint      `gorm:"index" json:"api_key_id"`
 	UserID      uint      `gorm:"index" json:"user_id"`
 	ModelID     uint      `gorm:"index" json:"model_id"`
@@ -90,21 +103,21 @@ type TrafficRecord struct {
 	OutputBytes int64     `json:"output_bytes"`
 	StartTime   time.Time `gorm:"index" json:"start_time"`
 	EndTime     time.Time `gorm:"index" json:"end_time"`
-	Duration    int64     `json:"duration"`              // 毫秒
+	Duration    int64     `json:"duration"` 	     // 毫秒
 	Status      string    `gorm:"size:20" json:"status"` // success/error
 	CreatedAt   time.Time `gorm:"index" json:"created_at"`
 }
 
 // ==================== 3.1 修复：API Key 加密/解密函数 ====================
 
-// 注意：加密密钥的获取逻辑（环境变量 > 配置文件 > 不加密）已在 main.go 中统一实现，
+// 注意：加密密钥为强制配置项，获取逻辑（环境变量 > 配置文件）在 main.go 中统一实现，
 // 密钥通过参数传递给各模块，无需在 database 包中单独获取。
 
 // EncryptAPIKey 使用AES-256-GCM加密API Key，返回带前缀的加密字符串
-// 如果encryptionKey为空，则不加密，直接返回原文（向后兼容）
+// encryptionKey为必填参数，未配置时返回错误（全新部署强制加密存储）
 func EncryptAPIKey(plaintext, encryptionKey string) (string, error) {
 	if encryptionKey == "" {
-		return plaintext, nil
+		return "", fmt.Errorf("加密密钥未配置，供应商API Key加密为强制要求，请设置ENCRYPTION_KEY环境变量或配置文件encryption_key")
 	}
 
 	key, err := base64.StdEncoding.DecodeString(encryptionKey)
@@ -135,18 +148,16 @@ func EncryptAPIKey(plaintext, encryptionKey string) (string, error) {
 	return EncryptedPrefix + base64.StdEncoding.EncodeToString(ciphertext), nil
 }
 
-// DecryptAPIKey 解密API Key，支持带加密前缀的密文和明文两种格式
-// 如果encryptionKey为空或值没有加密前缀，则直接返回原文
+// DecryptAPIKey 解密API Key，仅支持带加密前缀的密文格式
+// 全新部署下所有API Key均为加密存储，缺少加密前缀视为数据异常
 func DecryptAPIKey(ciphertext, encryptionKey string) (string, error) {
-	// 没有加密前缀，视为明文（向后兼容旧数据）
+	// 检查加密前缀，确认数据格式正确
 	if !hasEncryptedPrefix(ciphertext) {
-		return ciphertext, nil
+		return "", fmt.Errorf("API Key未加密（缺少加密前缀 %q），数据格式异常", EncryptedPrefix)
 	}
 
 	if encryptionKey == "" {
-		// 数据已加密但没有密钥，无法解密
-		log.Printf("[安全] 警告: API Key已加密但未提供ENCRYPTION_KEY，无法解密")
-		return ciphertext, fmt.Errorf("API Key已加密但未提供解密密钥")
+		return "", fmt.Errorf("API Key已加密但未提供解密密钥，请设置ENCRYPTION_KEY环境变量或配置文件encryption_key")
 	}
 
 	key, err := base64.StdEncoding.DecodeString(encryptionKey)
@@ -212,7 +223,7 @@ func InitDB(cfg *config.DatabaseConfig) (*gorm.DB, error) {
 	}
 
 	var db *gorm.DB
-	var err error
+	var err	error
 
 	switch cfg.Type {
 	case "sqlite":
@@ -223,11 +234,11 @@ func InitDB(cfg *config.DatabaseConfig) (*gorm.DB, error) {
 				return nil, fmt.Errorf("创建数据库目录失败: %w", err)
 			}
 		}
-		db, err = gorm.Open(sqlite.Open(cfg.DSN+"?_journal_mode=WAL"), gormConfig)
+		db, err	= gorm.Open(sqlite.Open(cfg.DSN+"?_journal_mode=WAL"), gormConfig)
 	case "mysql":
-		db, err = gorm.Open(mysql.Open(cfg.DSN), gormConfig)
+		db, err	= gorm.Open(mysql.Open(cfg.DSN), gormConfig)
 	case "postgres":
-		db, err = gorm.Open(postgres.Open(cfg.DSN), gormConfig)
+		db, err	= gorm.Open(postgres.Open(cfg.DSN), gormConfig)
 	default:
 		return nil, fmt.Errorf("不支持的数据库类型: %s", cfg.Type)
 	}
@@ -247,6 +258,7 @@ func AutoMigrate(db *gorm.DB) error {
 		&ModelProvider{},
 		&User{},
 		&APIKey{},
+		&AuditLog{}, // 7.1 审计日志表
 	)
 }
 
@@ -306,17 +318,17 @@ func EnsureTrafficTable(db *gorm.DB, t time.Time) error {
 								api_key_id INTEGER NOT NULL DEFAULT 0,
 								user_id INTEGER NOT NULL DEFAULT 0,
 								model_id INTEGER NOT NULL DEFAULT 0,
-								provider_id INTEGER NOT NULL DEFAULT 0,
-								input_bytes INTEGER NOT NULL DEFAULT 0,
+								provider_id INTEGER NOT	NULL DEFAULT 0,
+								input_bytes INTEGER NOT	NULL DEFAULT 0,
 								output_bytes INTEGER NOT NULL DEFAULT 0,
-								start_time DATETIME NOT NULL,
+								start_time DATETIME NOT	NULL,
 								end_time DATETIME NOT NULL,
 								duration INTEGER NOT NULL DEFAULT 0,
 								status VARCHAR(20) NOT NULL DEFAULT 'success',
-								created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+								created_at DATETIME NOT	NULL DEFAULT CURRENT_TIMESTAMP
 				)`, tableName)
 
-	if err := db.Exec(createSQL).Error; err != nil {
+	if err := db.Exec(createSQL).Error; err	!= nil {
 		return err
 	}
 
@@ -348,9 +360,9 @@ func EnsureTrafficTableMySQL(db *gorm.DB, t time.Time) error {
 								api_key_id BIGINT UNSIGNED NOT NULL DEFAULT 0,
 								user_id BIGINT UNSIGNED NOT NULL DEFAULT 0,
 								model_id BIGINT UNSIGNED NOT NULL DEFAULT 0,
-								provider_id BIGINT UNSIGNED NOT NULL DEFAULT 0,
+								provider_id BIGINT UNSIGNED NOT	NULL DEFAULT 0,
 								input_bytes BIGINT NOT NULL DEFAULT 0,
-								output_bytes BIGINT NOT NULL DEFAULT 0,
+								output_bytes BIGINT NOT	NULL DEFAULT 0,
 								start_time DATETIME(3) NOT NULL,
 								end_time DATETIME(3) NOT NULL,
 								duration BIGINT NOT NULL DEFAULT 0,
@@ -377,9 +389,9 @@ func EnsureTrafficTablePostgres(db *gorm.DB, t time.Time) error {
 								api_key_id INTEGER NOT NULL DEFAULT 0,
 								user_id INTEGER NOT NULL DEFAULT 0,
 								model_id INTEGER NOT NULL DEFAULT 0,
-								provider_id INTEGER NOT NULL DEFAULT 0,
+								provider_id INTEGER NOT	NULL DEFAULT 0,
 								input_bytes BIGINT NOT NULL DEFAULT 0,
-								output_bytes BIGINT NOT NULL DEFAULT 0,
+								output_bytes BIGINT NOT	NULL DEFAULT 0,
 								start_time TIMESTAMPTZ NOT NULL,
 								end_time TIMESTAMPTZ NOT NULL,
 								duration BIGINT NOT NULL DEFAULT 0,
@@ -399,7 +411,7 @@ func EnsureTrafficTablePostgres(db *gorm.DB, t time.Time) error {
 // GetTrafficTables 获取所有流量记录分表
 func GetTrafficTables(db *gorm.DB) ([]string, error) {
 	var tables []string
-	result := db.Raw("SELECT name FROM sqlite_master WHERE type='table' AND name LIKE 'traffic_records_%'").Scan(&tables)
+	result := db.Raw("SELECT name FROM sqlite_master WHERE type='table' AND	name LIKE 'traffic_records_%'").Scan(&tables)
 	if result.Error != nil {
 		return nil, result.Error
 	}

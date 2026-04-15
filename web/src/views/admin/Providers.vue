@@ -3,7 +3,9 @@
     <div class="page-header">
       <h3>供应商管理</h3>
       <el-button type="primary" @click="showCreateDialog">
-        <el-icon><Plus /></el-icon> 新建供应商
+        <el-icon>
+          <Plus />
+        </el-icon> 新建供应商
       </el-button>
     </div>
 
@@ -28,6 +30,12 @@
         </template>
       </el-table-column>
     </el-table>
+
+    <div class="pagination-wrapper">
+      <el-pagination v-model:current-page="currentPage" v-model:page-size="pageSize" :total="total"
+        :page-sizes="[10, 20, 50, 100]" layout="total, sizes, prev, pager, next" @size-change="fetchProviders"
+        @current-change="fetchProviders" />
+    </div>
 
     <el-dialog v-model="dialogVisible" :title="isEdit ? '编辑供应商' : '新建供应商'" width="560px">
       <el-form ref="formRef" :model="form" :rules="formRules" label-width="100px">
@@ -72,6 +80,9 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import type { FormInstance } from 'element-plus'
 
 const providers = ref<any[]>([])
+const currentPage = ref(1)
+const pageSize = ref(20)
+const total = ref(0)
 const dialogVisible = ref(false)
 const isEdit = ref(false)
 const editId = ref(0)
@@ -113,8 +124,9 @@ function getStatusText(status: string): string {
 
 async function fetchProviders() {
   try {
-    const res = await adminProviderApi.list()
-    providers.value = res.data || []
+    const res = await adminProviderApi.list({ page: currentPage.value, page_size: pageSize.value })
+    providers.value = res.data.items || []
+    total.value = res.data.total || 0
   } catch (e) {
     console.error(e)
   }
@@ -186,7 +198,14 @@ onMounted(() => {
   align-items: center;
   margin-bottom: 20px;
 }
+
 .page-header h3 {
   margin: 0;
+}
+
+.pagination-wrapper {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 16px;
 }
 </style>

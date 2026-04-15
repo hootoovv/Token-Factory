@@ -111,16 +111,20 @@ onMounted(() => {
   align-items: center;
   margin-bottom: 20px;
 }
+
 .page-header h3 {
   margin: 0;
 }
+
 .filter-bar {
   display: flex;
   align-items: center;
 }
+
 .stats-row {
   margin-bottom: 16px;
 }
+
 .stat-card {
   text-align: center;
 }

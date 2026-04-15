@@ -3,7 +3,9 @@
     <div class="page-header">
       <h3>API密钥管理</h3>
       <el-button type="primary" @click="createKey">
-        <el-icon><Plus /></el-icon> 创建密钥
+        <el-icon>
+          <Plus />
+        </el-icon> 创建密钥
       </el-button>
     </div>
 
@@ -22,7 +24,9 @@
               {{ scope.row.showFull ? '隐藏' : '显示' }}
             </el-button>
             <el-button text size="small" type="primary" @click="copyKey(scope.row)">
-              <el-icon><CopyDocument /></el-icon> 复制
+              <el-icon>
+                <CopyDocument />
+              </el-icon> 复制
             </el-button>
           </div>
         </template>
@@ -56,7 +60,9 @@
           <div class="key-generate-row">
             <el-input v-model="newKeyValue" readonly class="key-input-readonly" />
             <el-button type="primary" plain @click="regenerateKey">
-              <el-icon><Refresh /></el-icon> 重新生成
+              <el-icon>
+                <Refresh />
+              </el-icon> 重新生成
             </el-button>
           </div>
         </el-form-item>
@@ -175,14 +181,17 @@ onMounted(() => {
   align-items: center;
   margin-bottom: 20px;
 }
+
 .page-header h3 {
   margin: 0;
 }
+
 .key-cell {
   display: flex;
   align-items: center;
   gap: 8px;
 }
+
 .key-text {
   font-family: 'Courier New', monospace;
   font-size: 13px;
@@ -190,14 +199,17 @@ onMounted(() => {
   padding: 2px 8px;
   border-radius: 4px;
 }
+
 .key-generate-row {
   display: flex;
   gap: 8px;
   width: 100%;
 }
+
 .key-input-readonly {
   flex: 1;
 }
+
 .key-input-readonly :deep(.el-input__inner) {
   font-family: 'Courier New', monospace;
   font-size: 13px;

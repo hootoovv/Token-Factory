@@ -10,6 +10,25 @@ import (
 	"gorm.io/gorm"
 )
 
+// 4.4 修复：根据时间范围智能选择需要查询的分表
+// 避免每次统计查询都扫描全部分表（包括不相关月份的分表）
+// 核心逻辑：按月分表的命名规则已知（traffic_records_YYYYMM），
+// 根据 since 参数推算从 since 所在月份到当前月份的分表即可
+func getRelevantTables(db *gorm.DB, since time.Time) []string {
+	var tables []string
+	now := time.Now()
+	// 从 since 所在月份的第1天开始遍历
+	t := time.Date(since.Year(), since.Month(), 1, 0, 0, 0, 0, since.Location())
+	for t.Before(now) || t.Equal(now) {
+		tableName := database.GetTrafficTableName(t)
+		if db.Migrator().HasTable(tableName) {
+			tables = append(tables, tableName)
+		}
+		t = t.AddDate(0, 1, 0) // 前进一个月
+	}
+	return tables
+}
+
 // TrafficItem 流量记录项
 type TrafficItem struct {
 	APIKeyID    uint
@@ -189,15 +208,13 @@ func buildWhereClause(since time.Time, filter FilterParams) (string, []interface
 
 // buildUserWhereClause 构建用户相关的 WHERE 子句（参数化查询，防止SQL注入）
 func buildUserWhereClause(userID uint, since time.Time) (string, []interface{}) {
-	return "user_id = ? AND created_at >= ?", []interface{}{userID, since}
+	return "user_id = ? AND	created_at >= ?", []interface{}{userID, since}
 }
 
 // GetDashboardStats 获取Dashboard统计数据
 func GetDashboardStats(db *gorm.DB, since time.Time, filter FilterParams) (DashboardStats, error) {
-	tables, err := database.GetTrafficTables(db)
-	if err != nil {
-		return DashboardStats{}, err
-	}
+	// 4.4 修复：使用智能分表选择，仅查询since时间范围内的分表
+	tables := getRelevantTables(db, since)
 
 	if len(tables) == 0 {
 		return DashboardStats{}, nil
@@ -211,7 +228,7 @@ func GetDashboardStats(db *gorm.DB, since time.Time, filter FilterParams) (Dashb
 	allArgs := []interface{}{}
 	for i, table := range tables {
 		if i > 0 {
-			countSQL += " UNION ALL "
+			countSQL += " UNION ALL	"
 		}
 		countSQL += fmt.Sprintf("SELECT COUNT(*) as cnt, COALESCE(SUM(input_bytes),0) as ib, COALESCE(SUM(output_bytes),0) as ob, COALESCE(AVG(duration),0) as ad FROM %s WHERE %s", table, where)
 		allArgs = append(allArgs, args...)
@@ -243,9 +260,10 @@ func GetDashboardStats(db *gorm.DB, since time.Time, filter FilterParams) (Dashb
 
 // GetModelRanking 获取模型使用排行
 func GetModelRanking(db *gorm.DB, since time.Time, limit int, filter FilterParams) ([]RankingItem, error) {
-	tables, err := database.GetTrafficTables(db)
-	if err != nil || len(tables) == 0 {
-		return nil, err
+	// 4.4 修复：使用智能分表选择，仅查询since时间范围内的分表
+	tables := getRelevantTables(db, since)
+	if len(tables) == 0 {
+		return nil, nil
 	}
 
 	where, args := buildWhereClause(since, filter)
@@ -254,7 +272,7 @@ func GetModelRanking(db *gorm.DB, since time.Time, limit int, filter FilterParam
 	allArgs := []interface{}{}
 	for i, table := range tables {
 		if i > 0 {
-			unionSQL += " UNION ALL "
+			unionSQL += " UNION ALL	"
 		}
 		unionSQL += fmt.Sprintf("SELECT model_id, COUNT(*) as cnt, COALESCE(SUM(input_bytes),0) as ib, COALESCE(SUM(output_bytes),0) as ob FROM %s WHERE %s GROUP BY model_id", table, where)
 		allArgs = append(allArgs, args...)
@@ -278,9 +296,10 @@ func GetModelRanking(db *gorm.DB, since time.Time, limit int, filter FilterParam
 
 // GetProviderRanking 获取供应商使用排行
 func GetProviderRanking(db *gorm.DB, since time.Time, limit int, filter FilterParams) ([]RankingItem, error) {
-	tables, err := database.GetTrafficTables(db)
-	if err != nil || len(tables) == 0 {
-		return nil, err
+	// 4.4 修复：使用智能分表选择，仅查询since时间范围内的分表
+	tables := getRelevantTables(db, since)
+	if len(tables) == 0 {
+		return nil, nil
 	}
 
 	where, args := buildWhereClause(since, filter)
@@ -289,7 +308,7 @@ func GetProviderRanking(db *gorm.DB, since time.Time, limit int, filter FilterPa
 	allArgs := []interface{}{}
 	for i, table := range tables {
 		if i > 0 {
-			unionSQL += " UNION ALL "
+			unionSQL += " UNION ALL	"
 		}
 		unionSQL += fmt.Sprintf("SELECT provider_id, COUNT(*) as cnt, COALESCE(SUM(input_bytes),0) as ib, COALESCE(SUM(output_bytes),0) as ob FROM %s WHERE %s GROUP BY provider_id", table, where)
 		allArgs = append(allArgs, args...)
@@ -313,9 +332,10 @@ func GetProviderRanking(db *gorm.DB, since time.Time, limit int, filter FilterPa
 
 // GetUserStats 获取用户的使用统计
 func GetUserStats(db *gorm.DB, userID uint, since time.Time) (DashboardStats, error) {
-	tables, err := database.GetTrafficTables(db)
-	if err != nil || len(tables) == 0 {
-		return DashboardStats{}, err
+	// 4.4 修复：使用智能分表选择，仅查询since时间范围内的分表
+	tables := getRelevantTables(db, since)
+	if len(tables) == 0 {
+		return DashboardStats{}, nil
 	}
 
 	where, args := buildUserWhereClause(userID, since)
@@ -324,7 +344,7 @@ func GetUserStats(db *gorm.DB, userID uint, since time.Time) (DashboardStats, er
 	allArgs := []interface{}{}
 	for i, table := range tables {
 		if i > 0 {
-			countSQL += " UNION ALL "
+			countSQL += " UNION ALL	"
 		}
 		countSQL += fmt.Sprintf("SELECT COUNT(*) as cnt, COALESCE(SUM(input_bytes),0) as ib, COALESCE(SUM(output_bytes),0) as ob, COALESCE(AVG(duration),0) as ad FROM %s WHERE %s", table, where)
 		allArgs = append(allArgs, args...)
@@ -353,9 +373,10 @@ func GetUserStats(db *gorm.DB, userID uint, since time.Time) (DashboardStats, er
 
 // GetUserTrafficRecords 获取用户的使用记录
 func GetUserTrafficRecords(db *gorm.DB, userID uint, since time.Time, page, pageSize int) ([]map[string]interface{}, int64, error) {
-	tables, err := database.GetTrafficTables(db)
-	if err != nil || len(tables) == 0 {
-		return nil, 0, err
+	// 4.4 修复：使用智能分表选择，仅查询since时间范围内的分表
+	tables := getRelevantTables(db, since)
+	if len(tables) == 0 {
+		return nil, 0, nil
 	}
 
 	where, args := buildUserWhereClause(userID, since)
@@ -365,7 +386,7 @@ func GetUserTrafficRecords(db *gorm.DB, userID uint, since time.Time, page, page
 	allArgs := []interface{}{}
 	for i, table := range tables {
 		if i > 0 {
-			countSQL += " UNION ALL "
+			countSQL += " UNION ALL	"
 		}
 		countSQL += fmt.Sprintf("SELECT * FROM %s WHERE %s", table, where)
 		allArgs = append(allArgs, args...)

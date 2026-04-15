@@ -14,40 +14,23 @@
           <el-radio-button label="month">本月</el-radio-button>
         </el-radio-group>
         <!-- 3.4 修复：用户和管理员均可使用模型和供应商过滤器 -->
-        <el-select
-          v-model="modelFilter"
-          placeholder="全部模型"
-          clearable
-          size="small"
-          style="width: 160px; margin-left: 12px;"
-          @change="onFilterChange"
-        >
+        <el-select v-model="modelFilter" placeholder="全部模型" clearable size="small"
+          style="width: 160px; margin-left: 12px;" @change="onFilterChange">
           <el-option v-for="m in allModels" :key="m.id" :label="m.name" :value="m.id" />
         </el-select>
-        <el-select
-          v-model="providerFilter"
-          placeholder="全部供应商"
-          clearable
-          size="small"
-          style="width: 160px; margin-left: 12px;"
-          @change="onFilterChange"
-        >
+        <el-select v-model="providerFilter" placeholder="全部供应商" clearable size="small"
+          style="width: 160px; margin-left: 12px;" @change="onFilterChange">
           <el-option v-for="p in allProviders" :key="p.id" :label="p.name" :value="p.id" />
         </el-select>
         <!-- 3.4 修复：管理员额外显示用户过滤器 -->
-        <el-select
-          v-if="userStore.isAdmin"
-          v-model="userFilter"
-          placeholder="全部用户"
-          clearable
-          size="small"
-          style="width: 160px; margin-left: 12px;"
-          @change="onFilterChange"
-        >
+        <el-select v-if="userStore.isAdmin" v-model="userFilter" placeholder="全部用户" clearable size="small"
+          style="width: 160px; margin-left: 12px;" @change="onFilterChange">
           <el-option v-for="u in allUsers" :key="u.id" :label="u.display_name || u.username" :value="u.id" />
         </el-select>
         <el-button text size="small" @click="$router.push('/')" style="margin-left: 12px;">
-          <el-icon><HomeFilled /></el-icon> 返回主页
+          <el-icon>
+            <HomeFilled />
+          </el-icon> 返回主页
         </el-button>
       </div>
     </div>
@@ -58,10 +41,12 @@
       <el-tag v-if="modelFilter" closable size="small" @close="clearModelFilter">
         模型: {{ getModelName(modelFilter) }}
       </el-tag>
-      <el-tag v-if="providerFilter" closable size="small" type="warning" @close="clearProviderFilter" style="margin-left: 6px;">
+      <el-tag v-if="providerFilter" closable size="small" type="warning" @close="clearProviderFilter"
+        style="margin-left: 6px;">
         供应商: {{ getProviderName(providerFilter) }}
       </el-tag>
-      <el-tag v-if="userFilter && userStore.isAdmin" closable size="small" type="danger" @close="clearUserFilter" style="margin-left: 6px;">
+      <el-tag v-if="userFilter && userStore.isAdmin" closable size="small" type="danger" @close="clearUserFilter"
+        style="margin-left: 6px;">
         用户: {{ getUserName(userFilter) }}
       </el-tag>
       <el-button text size="small" @click="clearAllFilters" style="margin-left: 8px;">清除全部</el-button>
@@ -72,7 +57,9 @@
       <el-col :span="6">
         <el-card shadow="hover" class="stat-card">
           <div class="stat-icon" style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);">
-            <el-icon :size="28"><Phone /></el-icon>
+            <el-icon :size="28">
+              <Phone />
+            </el-icon>
           </div>
           <div class="stat-info">
             <div class="stat-value">{{ formatNumber(stats.total_calls) }}</div>
@@ -83,7 +70,9 @@
       <el-col :span="6">
         <el-card shadow="hover" class="stat-card">
           <div class="stat-icon" style="background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);">
-            <el-icon :size="28"><Upload /></el-icon>
+            <el-icon :size="28">
+              <Upload />
+            </el-icon>
           </div>
           <div class="stat-info">
             <div class="stat-value">{{ formatBytes(stats.total_input_bytes) }}</div>
@@ -94,7 +83,9 @@
       <el-col :span="6">
         <el-card shadow="hover" class="stat-card">
           <div class="stat-icon" style="background: linear-gradient(135deg, #4facfe 0%, #00f2fe 100%);">
-            <el-icon :size="28"><Download /></el-icon>
+            <el-icon :size="28">
+              <Download />
+            </el-icon>
           </div>
           <div class="stat-info">
             <div class="stat-value">{{ formatBytes(stats.total_output_bytes) }}</div>
@@ -105,7 +96,9 @@
       <el-col :span="6">
         <el-card shadow="hover" class="stat-card">
           <div class="stat-icon" style="background: linear-gradient(135deg, #43e97b 0%, #38f9d7 100%);">
-            <el-icon :size="28"><Timer /></el-icon>
+            <el-icon :size="28">
+              <Timer />
+            </el-icon>
           </div>
           <div class="stat-info">
             <div class="stat-value">{{ stats.avg_duration?.toFixed(0) || 0 }} ms</div>
@@ -132,7 +125,8 @@
                 <span class="ranking-name">{{ item.name }}</span>
               </div>
               <div class="ranking-right">
-                <el-progress :percentage="getPercentage(item.count, modelRanking)" :stroke-width="8" :show-text="false" style="width: 120px;" />
+                <el-progress :percentage="getPercentage(item.count, modelRanking)" :stroke-width="8" :show-text="false"
+                  style="width: 120px;" />
                 <span class="ranking-count">{{ formatNumber(item.count) }}</span>
               </div>
             </div>
@@ -155,7 +149,8 @@
                 <span class="ranking-name">{{ item.name }}</span>
               </div>
               <div class="ranking-right">
-                <el-progress :percentage="getPercentage(item.count, providerRanking)" :stroke-width="8" :show-text="false" style="width: 120px;" color="#409eff" />
+                <el-progress :percentage="getPercentage(item.count, providerRanking)" :stroke-width="8"
+                  :show-text="false" style="width: 120px;" color="#409eff" />
                 <span class="ranking-count">{{ formatNumber(item.count) }}</span>
               </div>
             </div>
@@ -338,28 +333,33 @@ onMounted(() => {
   max-width: 1400px;
   margin: 0 auto;
 }
+
 .dashboard-header {
   display: flex;
   justify-content: space-between;
   align-items: center;
   margin-bottom: 20px;
 }
+
 .header-title h2 {
   margin: 0;
   font-size: 24px;
   color: #303133;
 }
+
 .subtitle {
   margin: 4px 0 0;
   color: #909399;
   font-size: 14px;
 }
+
 .filter-bar {
   display: flex;
   align-items: center;
   flex-wrap: wrap;
   gap: 0;
 }
+
 .filter-tip {
   display: flex;
   align-items: center;
@@ -370,20 +370,24 @@ onMounted(() => {
   font-size: 13px;
   color: #606266;
 }
+
 .stats-row {
   margin-bottom: 20px;
 }
+
 .stat-card {
   display: flex;
   align-items: center;
   padding: 0;
 }
+
 .stat-card :deep(.el-card__body) {
   display: flex;
   align-items: center;
   padding: 20px;
   width: 100%;
 }
+
 .stat-icon {
   width: 56px;
   height: 56px;
@@ -395,31 +399,38 @@ onMounted(() => {
   margin-right: 16px;
   flex-shrink: 0;
 }
+
 .stat-info {
   flex: 1;
 }
+
 .stat-value {
   font-size: 24px;
   font-weight: 700;
   color: #303133;
 }
+
 .stat-label {
   font-size: 13px;
   color: #909399;
   margin-top: 4px;
 }
+
 .charts-row {
   margin-bottom: 20px;
 }
+
 .card-header {
   display: flex;
   justify-content: space-between;
   align-items: center;
   font-weight: 600;
 }
+
 .ranking-list {
   min-height: 300px;
 }
+
 .ranking-item {
   display: flex;
   align-items: center;
@@ -427,14 +438,17 @@ onMounted(() => {
   padding: 10px 0;
   border-bottom: 1px solid #f0f0f0;
 }
+
 .ranking-item:last-child {
   border-bottom: none;
 }
+
 .ranking-left {
   display: flex;
   align-items: center;
   gap: 12px;
 }
+
 .ranking-index {
   width: 24px;
   height: 24px;
@@ -447,19 +461,23 @@ onMounted(() => {
   background: #f0f0f0;
   color: #909399;
 }
+
 .ranking-index.top3 {
   background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
   color: #fff;
 }
+
 .ranking-name {
   font-size: 14px;
   color: #303133;
 }
+
 .ranking-right {
   display: flex;
   align-items: center;
   gap: 12px;
 }
+
 .ranking-count {
   font-size: 14px;
   font-weight: 600;

@@ -15,15 +15,11 @@
           <el-radio-button label="month">本月</el-radio-button>
         </el-radio-group>
         <!-- 3.4 修复：已登录用户显示"我的仪表板"入口 -->
-        <el-button
-          v-if="userStore.isLoggedIn"
-          type="primary"
-          plain
-          size="small"
-          style="margin-left: 12px;"
-          @click="$router.push('/dashboard')"
-        >
-          <el-icon><DataAnalysis /></el-icon> 我的仪表板
+        <el-button v-if="userStore.isLoggedIn" type="primary" plain size="small" style="margin-left: 12px;"
+          @click="$router.push('/dashboard')">
+          <el-icon>
+            <DataAnalysis />
+          </el-icon> 我的仪表板
         </el-button>
       </div>
     </div>
@@ -33,7 +29,9 @@
       <el-col :span="6">
         <el-card shadow="hover" class="stat-card">
           <div class="stat-icon" style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);">
-            <el-icon :size="28"><Phone /></el-icon>
+            <el-icon :size="28">
+              <Phone />
+            </el-icon>
           </div>
           <div class="stat-info">
             <div class="stat-value">{{ formatNumber(stats.total_calls) }}</div>
@@ -44,7 +42,9 @@
       <el-col :span="6">
         <el-card shadow="hover" class="stat-card">
           <div class="stat-icon" style="background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);">
-            <el-icon :size="28"><Upload /></el-icon>
+            <el-icon :size="28">
+              <Upload />
+            </el-icon>
           </div>
           <div class="stat-info">
             <div class="stat-value">{{ formatBytes(stats.total_input_bytes) }}</div>
@@ -55,7 +55,9 @@
       <el-col :span="6">
         <el-card shadow="hover" class="stat-card">
           <div class="stat-icon" style="background: linear-gradient(135deg, #4facfe 0%, #00f2fe 100%);">
-            <el-icon :size="28"><Download /></el-icon>
+            <el-icon :size="28">
+              <Download />
+            </el-icon>
           </div>
           <div class="stat-info">
             <div class="stat-value">{{ formatBytes(stats.total_output_bytes) }}</div>
@@ -66,7 +68,9 @@
       <el-col :span="6">
         <el-card shadow="hover" class="stat-card">
           <div class="stat-icon" style="background: linear-gradient(135deg, #43e97b 0%, #38f9d7 100%);">
-            <el-icon :size="28"><Timer /></el-icon>
+            <el-icon :size="28">
+              <Timer />
+            </el-icon>
           </div>
           <div class="stat-info">
             <div class="stat-value">{{ stats.avg_duration?.toFixed(0) || 0 }} ms</div>
@@ -93,7 +97,8 @@
                 <span class="ranking-name">{{ item.name }}</span>
               </div>
               <div class="ranking-right">
-                <el-progress :percentage="getPercentage(item.count, modelRanking)" :stroke-width="8" :show-text="false" style="width: 120px;" />
+                <el-progress :percentage="getPercentage(item.count, modelRanking)" :stroke-width="8" :show-text="false"
+                  style="width: 120px;" />
                 <span class="ranking-count">{{ formatNumber(item.count) }}</span>
               </div>
             </div>
@@ -116,7 +121,8 @@
                 <span class="ranking-name">{{ item.name }}</span>
               </div>
               <div class="ranking-right">
-                <el-progress :percentage="getPercentage(item.count, providerRanking)" :stroke-width="8" :show-text="false" style="width: 120px;" color="#409eff" />
+                <el-progress :percentage="getPercentage(item.count, providerRanking)" :stroke-width="8"
+                  :show-text="false" style="width: 120px;" color="#409eff" />
                 <span class="ranking-count">{{ formatNumber(item.count) }}</span>
               </div>
             </div>
@@ -132,7 +138,9 @@
         <div class="card-header">
           <span>供应商实时状态</span>
           <el-button text size="small" @click="fetchProviderStatus">
-            <el-icon><Refresh /></el-icon> 刷新
+            <el-icon>
+              <Refresh />
+            </el-icon> 刷新
           </el-button>
         </div>
       </template>
@@ -271,40 +279,48 @@ onMounted(() => {
   max-width: 1400px;
   margin: 0 auto;
 }
+
 .dashboard-header {
   display: flex;
   justify-content: space-between;
   align-items: center;
   margin-bottom: 20px;
 }
+
 .header-title h2 {
   margin: 0;
   font-size: 24px;
   color: #303133;
 }
+
 .subtitle {
   margin: 4px 0 0;
   color: #909399;
   font-size: 14px;
 }
+
 .filter-bar {
   display: flex;
   align-items: center;
 }
+
 .stats-row {
   margin-bottom: 20px;
 }
+
 .stat-card {
   display: flex;
   align-items: center;
   padding: 0;
 }
+
 .stat-card :deep(.el-card__body) {
   display: flex;
   align-items: center;
   padding: 20px;
   width: 100%;
 }
+
 .stat-icon {
   width: 56px;
   height: 56px;
@@ -316,31 +332,38 @@ onMounted(() => {
   margin-right: 16px;
   flex-shrink: 0;
 }
+
 .stat-info {
   flex: 1;
 }
+
 .stat-value {
   font-size: 24px;
   font-weight: 700;
   color: #303133;
 }
+
 .stat-label {
   font-size: 13px;
   color: #909399;
   margin-top: 4px;
 }
+
 .charts-row {
   margin-bottom: 20px;
 }
+
 .card-header {
   display: flex;
   justify-content: space-between;
   align-items: center;
   font-weight: 600;
 }
+
 .ranking-list {
   min-height: 300px;
 }
+
 .ranking-item {
   display: flex;
   align-items: center;
@@ -348,14 +371,17 @@ onMounted(() => {
   padding: 10px 0;
   border-bottom: 1px solid #f0f0f0;
 }
+
 .ranking-item:last-child {
   border-bottom: none;
 }
+
 .ranking-left {
   display: flex;
   align-items: center;
   gap: 12px;
 }
+
 .ranking-index {
   width: 24px;
   height: 24px;
@@ -368,19 +394,23 @@ onMounted(() => {
   background: #f0f0f0;
   color: #909399;
 }
+
 .ranking-index.top3 {
   background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
   color: #fff;
 }
+
 .ranking-name {
   font-size: 14px;
   color: #303133;
 }
+
 .ranking-right {
   display: flex;
   align-items: center;
   gap: 12px;
 }
+
 .ranking-count {
   font-size: 14px;
   font-weight: 600;
@@ -388,6 +418,7 @@ onMounted(() => {
   min-width: 60px;
   text-align: right;
 }
+
 .provider-status-card {
   margin-bottom: 20px;
 }

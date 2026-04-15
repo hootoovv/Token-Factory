@@ -1,6 +1,7 @@
 package admin
 
 import (
+	"context"
 	"crypto/rand"
 	"embed"
 	"encoding/base64"
@@ -34,6 +35,7 @@ const (
 type Server struct {
 	db              *gorm.DB
 	cache           *cache.Cache
+	debouncedCache  *cache.DebouncedCache // 4.3 修复：防抖缓存，避免频繁重载
 	recorder        *traffic.Recorder
 	jwtSecret       []byte
 	encryptionKey   string // 3.1 修复：加密密钥，用于加密存储供应商API Key
@@ -48,6 +50,7 @@ func NewServer(db *gorm.DB, c *cache.Cache, r *traffic.Recorder, jwtSecret []byt
 	return &Server{
 		db:              db,
 		cache:           c,
+		debouncedCache:  cache.NewDebouncedCache(c, 2*time.Second), // 4.3 修复：2秒防抖延迟
 		recorder:        r,
 		jwtSecret:       jwtSecret,
 		encryptionKey:   encryptionKey,
@@ -85,6 +88,33 @@ type UpdateProviderReq struct {
 type UpdateModelReq struct {
 	Name        *string `json:"name" binding:"omitempty,min=1,max=100"`
 	Description *string `json:"description" binding:"omitempty,max=500"`
+}
+
+// ==================== 7.1 审计日志辅助函数 ====================
+
+// recordAuditLog 记录审计日志（异步写入，不阻塞主流程）
+func (s *Server) recordAuditLog(c *gin.Context, action, targetType, targetID, detail string) {
+	operatorID := c.GetUint("userID")
+	operatorName := c.GetString("username")
+	ipAddress := c.ClientIP()
+
+	auditLog := database.AuditLog{
+		OperatorID:   operatorID,
+		OperatorName: operatorName,
+		Action:       action,
+		TargetType:   targetType,
+		TargetID:     targetID,
+		Detail:       detail,
+		IPAddress:    ipAddress,
+	}
+
+	// 异步写入，避免影响接口响应速度
+	go func() {
+		if err := s.db.Create(&auditLog).Error; err != nil {
+			log.Printf("[审计] 写入审计日志失败: %v (action=%s, target=%s/%s)",
+				err, action, targetType, targetID)
+		}
+	}()
 }
 
 // ==================== 辅助函数 ====================
@@ -204,6 +234,9 @@ func (s *Server) Start(addr string) error {
 				// 统计
 				admin.GET("/stats/overview", s.handleAdminStats)
 
+				// 审计日志
+				admin.GET("/audit-logs", s.handleListAuditLogs)
+
 				// 缓存重载
 				admin.POST("/cache/reload", s.handleCacheReload)
 			}
@@ -266,6 +299,14 @@ func (s *Server) Start(addr string) error {
 
 	log.Printf("[管理] 服务器启动在 %s", addr)
 	return s.server.ListenAndServe()
+}
+
+// 5.4 修复：优雅关闭管理服务器
+func (s *Server) Shutdown(ctx context.Context) error {
+	if s.server != nil {
+		return s.server.Shutdown(ctx)
+	}
+	return nil
 }
 
 // getAllowedOrigins 获取CORS允许的来源列表
@@ -391,7 +432,7 @@ func (s *Server) handleProviderRanking(c *gin.Context) {
 // handleProviderStatus 供应商实时状态（公开）
 func (s *Server) handleProviderStatus(c *gin.Context) {
 	providers := s.cache.GetProviders()
-	var result []gin.H
+	result := make([]gin.H, 0, len(providers))
 	for _, p := range providers {
 		statusText := "工作中"
 		if p.Status == "cooldown" {
@@ -509,7 +550,7 @@ func (s *Server) handleMyDashboardUsers(c *gin.Context) {
 	var users []database.User
 	s.db.Select("id, username, display_name").Order("id ASC").Find(&users)
 
-	var result []gin.H
+	result := make([]gin.H, 0, len(users))
 	for _, u := range users {
 		result = append(result, gin.H{
 			"id":           u.ID,
@@ -553,7 +594,7 @@ func (s *Server) handleListAPIKeys(c *gin.Context) {
 	s.db.Where("user_id = ?", userID).Find(&keys)
 
 	// 3.5 修复：API Key值在列表查询中脱敏显示，同时提供加密传输的完整值
-	var result []gin.H
+	result := make([]gin.H, 0, len(keys))
 	for _, k := range keys {
 		result = append(result, gin.H{
 			"id":            k.ID,
@@ -605,7 +646,11 @@ func (s *Server) handleCreateAPIKey(c *gin.Context) {
 	}
 
 	// 重新加载缓存
-	go s.cache.Reload()
+	s.debouncedCache.Reload()
+
+	// 7.1 审计日志：记录API-Key创建操作
+	s.recordAuditLog(c, "create", "api_key", fmt.Sprintf("%d", newKey.ID),
+		fmt.Sprintf("创建API-Key: name=%s, key_prefix=%s", newKey.Name, newKey.Key[:7]))
 
 	// 3.5 修复：创建时返回加密的完整Key（仅此一次），之后列表中只显示脱敏值
 	c.JSON(200, gin.H{
@@ -626,13 +671,24 @@ func (s *Server) handleDeleteAPIKey(c *gin.Context) {
 	userID := c.GetUint("userID")
 	id := c.Param("id")
 
+	// 先查询API-Key信息用于审计日志
+	var apiKeyInfo database.APIKey
+	if err := s.db.Where("id = ? AND user_id = ?", id, userID).First(&apiKeyInfo).Error; err != nil {
+		c.JSON(404, gin.H{"error": "API-Key不存在"})
+		return
+	}
+
 	result := s.db.Where("id = ? AND user_id = ?", id, userID).Delete(&database.APIKey{})
 	if result.RowsAffected == 0 {
 		c.JSON(404, gin.H{"error": "API-Key不存在"})
 		return
 	}
 
-	go s.cache.Reload()
+	// 7.1 审计日志：记录API-Key删除操作
+	s.recordAuditLog(c, "delete", "api_key", id,
+		fmt.Sprintf("删除API-Key: name=%s, key_prefix=%s", apiKeyInfo.Name, apiKeyInfo.Key[:7]))
+
+	s.debouncedCache.Reload()
 	c.JSON(200, gin.H{"message": "删除成功"})
 }
 
@@ -710,13 +766,20 @@ func (s *Server) handleChangePassword(c *gin.Context) {
 
 // ==================== 管理员接口 ====================
 
-// handleListUsers 列出用户
+// 4.1 修复：添加分页支持，避免全表扫描
+// handleListUsers 列出用户（分页）
 func (s *Server) handleListUsers(c *gin.Context) {
+	page := s.getPage(c)
+	pageSize := s.getPageSize(c)
+
 	var users []database.User
-	s.db.Find(&users)
+	var total int64
+	s.db.Model(&database.User{}).Count(&total)
+	s.db.Select("id, username, role, display_name, created_at, updated_at").
+		Offset((page - 1) * pageSize).Limit(pageSize).Find(&users)
 
 	// 隐藏密码字段
-	var result []gin.H
+	result := make([]gin.H, 0, len(users))
 	for _, u := range users {
 		result = append(result, gin.H{
 			"id":           u.ID,
@@ -727,7 +790,12 @@ func (s *Server) handleListUsers(c *gin.Context) {
 			"updated_at":   u.UpdatedAt,
 		})
 	}
-	c.JSON(200, result)
+	c.JSON(200, gin.H{
+		"items":     result,
+		"total":     total,
+		"page":      page,
+		"page_size": pageSize,
+	})
 }
 
 // handleCreateUser 创建用户
@@ -828,35 +896,65 @@ func (s *Server) handleUpdateUser(c *gin.Context) {
 	c.JSON(200, gin.H{"message": "更新成功"})
 }
 
+// 5.2 修复：使用事务保证关联操作的原子性
 // handleDeleteUser 删除用户
 func (s *Server) handleDeleteUser(c *gin.Context) {
 	id := c.Param("id")
-	result := s.db.Delete(&database.User{}, id)
-	if result.RowsAffected == 0 {
-		c.JSON(404, gin.H{"error": "用户不存在"})
+	err := s.db.Transaction(func(tx *gorm.DB) error {
+		// 先删除该用户的API-Key
+		if err := tx.Where("user_id = ?", id).Delete(&database.APIKey{}).Error; err != nil {
+			return err
+		}
+		// 再删除用户
+		result := tx.Delete(&database.User{}, id)
+		if result.Error != nil {
+			return result.Error
+		}
+		if result.RowsAffected == 0 {
+			return gorm.ErrRecordNotFound
+		}
+		return nil
+	})
+	if err != nil {
+		if err == gorm.ErrRecordNotFound {
+			c.JSON(404, gin.H{"error": "用户不存在"})
+			return
+		}
+		log.Printf("[管理] 删除用户失败: %v", err)
+		c.JSON(500, gin.H{"error": "删除用户失败，请稍后重试"})
 		return
 	}
-	// 同时删除该用户的API-Key
-	s.db.Where("user_id = ?", id).Delete(&database.APIKey{})
-	go s.cache.Reload()
+	s.debouncedCache.Reload()
 	c.JSON(200, gin.H{"message": "删除成功"})
 }
 
 // 2.2 修复：供应商列表返回时对API Key进行脱敏
-// 3.1 修复：从缓存中读取的API Key已经是解密后的明文，脱敏后返回前端
-// handleListProviders 列出供应商
+// 3.1 修复：从数据库读取并解密API Key，脱敏后返回前端
+// 4.1 修复：添加分页支持，与其他管理员接口保持一致
+// handleListProviders 列出供应商（分页）
 func (s *Server) handleListProviders(c *gin.Context) {
-	providers := s.cache.GetProviders()
+	page := s.getPage(c)
+	pageSize := s.getPageSize(c)
 
-	// 脱敏处理：不直接返回完整API Key
-	var result []gin.H
+	var providers []database.Provider
+	var total int64
+	s.db.Model(&database.Provider{}).Count(&total)
+	s.db.Order("id ASC").Offset((page - 1) * pageSize).Limit(pageSize).Find(&providers)
+
+	// 脱敏处理：解密后脱敏，不直接返回完整API Key
+	result := make([]gin.H, 0, len(providers))
 	for _, p := range providers {
+		decryptedKey, err := database.DecryptAPIKey(p.APIKey, s.encryptionKey)
+		if err != nil {
+			log.Printf("[管理] 解密供应商 %s 的API Key失败: %v", p.Name, err)
+			decryptedKey = "****"
+		}
 		result = append(result, gin.H{
 			"id":          p.ID,
 			"name":        p.Name,
 			"description": p.Description,
 			"base_url":    p.BaseURL,
-			"api_key":     maskAPIKey(p.APIKey), // 脱敏: "sk-a...yz"
+			"api_key":     maskAPIKey(decryptedKey), // 脱敏: "sk-a...yz"
 			"timeout":     p.Timeout,
 			"retry":       p.Retry,
 			"status":      p.Status,
@@ -864,7 +962,12 @@ func (s *Server) handleListProviders(c *gin.Context) {
 			"updated_at":  p.UpdatedAt,
 		})
 	}
-	c.JSON(200, result)
+	c.JSON(200, gin.H{
+		"items":     result,
+		"total":     total,
+		"page":      page,
+		"page_size": pageSize,
+	})
 }
 
 // 2.4 修复：使用结构体绑定，添加输入校验
@@ -912,7 +1015,7 @@ func (s *Server) handleCreateProvider(c *gin.Context) {
 		return
 	}
 
-	go s.cache.Reload()
+	s.debouncedCache.Reload()
 
 	// 返回时对API Key脱敏（返回用户输入的原始值脱敏，而非加密值）
 	c.JSON(200, gin.H{
@@ -972,30 +1075,59 @@ func (s *Server) handleUpdateProvider(c *gin.Context) {
 
 	if len(updates) > 0 {
 		s.db.Model(&database.Provider{}).Where("id = ?", id).Updates(updates)
-		go s.cache.Reload()
+		s.debouncedCache.Reload()
 	}
 	c.JSON(200, gin.H{"message": "更新成功"})
 }
 
+// 5.2 修复：使用事务保证关联操作的原子性
 // handleDeleteProvider 删除供应商
 func (s *Server) handleDeleteProvider(c *gin.Context) {
 	id := c.Param("id")
-	result := s.db.Delete(&database.Provider{}, id)
-	if result.RowsAffected == 0 {
-		c.JSON(404, gin.H{"error": "供应商不存在"})
+	err := s.db.Transaction(func(tx *gorm.DB) error {
+		// 先删除相关映射
+		if err := tx.Where("provider_id = ?", id).Delete(&database.ModelProvider{}).Error; err != nil {
+			return err
+		}
+		// 再删除供应商
+		result := tx.Delete(&database.Provider{}, id)
+		if result.Error != nil {
+			return result.Error
+		}
+		if result.RowsAffected == 0 {
+			return gorm.ErrRecordNotFound
+		}
+		return nil
+	})
+	if err != nil {
+		if err == gorm.ErrRecordNotFound {
+			c.JSON(404, gin.H{"error": "供应商不存在"})
+			return
+		}
+		log.Printf("[管理] 删除供应商失败: %v", err)
+		c.JSON(500, gin.H{"error": "删除供应商失败，请稍后重试"})
 		return
 	}
-	// 同时删除相关映射
-	s.db.Where("provider_id = ?", id).Delete(&database.ModelProvider{})
-	go s.cache.Reload()
+	s.debouncedCache.Reload()
 	c.JSON(200, gin.H{"message": "删除成功"})
 }
 
-// handleListModels 列出模型
+// 4.1 修复：添加分页支持，避免全表扫描
+// handleListModels 列出模型（分页）
 func (s *Server) handleListModels(c *gin.Context) {
+	page := s.getPage(c)
+	pageSize := s.getPageSize(c)
+
 	var models []database.Model
-	s.db.Find(&models)
-	c.JSON(200, models)
+	var total int64
+	s.db.Model(&database.Model{}).Count(&total)
+	s.db.Offset((page - 1) * pageSize).Limit(pageSize).Find(&models)
+	c.JSON(200, gin.H{
+		"items":     models,
+		"total":     total,
+		"page":      page,
+		"page_size": pageSize,
+	})
 }
 
 // handleCreateModel 创建模型
@@ -1013,7 +1145,7 @@ func (s *Server) handleCreateModel(c *gin.Context) {
 		return
 	}
 
-	go s.cache.Reload()
+	s.debouncedCache.Reload()
 	c.JSON(200, model)
 }
 
@@ -1037,29 +1169,59 @@ func (s *Server) handleUpdateModel(c *gin.Context) {
 
 	if len(updates) > 0 {
 		s.db.Model(&database.Model{}).Where("id = ?", id).Updates(updates)
-		go s.cache.Reload()
+		s.debouncedCache.Reload()
 	}
 	c.JSON(200, gin.H{"message": "更新成功"})
 }
 
+// 5.2 修复：使用事务保证关联操作的原子性
 // handleDeleteModel 删除模型
 func (s *Server) handleDeleteModel(c *gin.Context) {
 	id := c.Param("id")
-	result := s.db.Delete(&database.Model{}, id)
-	if result.RowsAffected == 0 {
-		c.JSON(404, gin.H{"error": "模型不存在"})
+	err := s.db.Transaction(func(tx *gorm.DB) error {
+		// 先删除相关映射
+		if err := tx.Where("model_id = ?", id).Delete(&database.ModelProvider{}).Error; err != nil {
+			return err
+		}
+		// 再删除模型
+		result := tx.Delete(&database.Model{}, id)
+		if result.Error != nil {
+			return result.Error
+		}
+		if result.RowsAffected == 0 {
+			return gorm.ErrRecordNotFound
+		}
+		return nil
+	})
+	if err != nil {
+		if err == gorm.ErrRecordNotFound {
+			c.JSON(404, gin.H{"error": "模型不存在"})
+			return
+		}
+		log.Printf("[管理] 删除模型失败: %v", err)
+		c.JSON(500, gin.H{"error": "删除模型失败，请稍后重试"})
 		return
 	}
-	s.db.Where("model_id = ?", id).Delete(&database.ModelProvider{})
-	go s.cache.Reload()
+	s.debouncedCache.Reload()
 	c.JSON(200, gin.H{"message": "删除成功"})
 }
 
-// handleListModelProviders 列出模型-供应商映射
+// 4.1 修复：添加分页支持，避免全表扫描
+// handleListModelProviders 列出模型-供应商映射（分页）
 func (s *Server) handleListModelProviders(c *gin.Context) {
+	page := s.getPage(c)
+	pageSize := s.getPageSize(c)
+
 	var mappings []database.ModelProvider
-	s.db.Find(&mappings)
-	c.JSON(200, mappings)
+	var total int64
+	s.db.Model(&database.ModelProvider{}).Count(&total)
+	s.db.Offset((page - 1) * pageSize).Limit(pageSize).Find(&mappings)
+	c.JSON(200, gin.H{
+		"items":     mappings,
+		"total":     total,
+		"page":      page,
+		"page_size": pageSize,
+	})
 }
 
 // handleCreateModelProvider 创建模型-供应商映射
@@ -1077,7 +1239,7 @@ func (s *Server) handleCreateModelProvider(c *gin.Context) {
 		return
 	}
 
-	go s.cache.Reload()
+	s.debouncedCache.Reload()
 	c.JSON(200, mp)
 }
 
@@ -1089,7 +1251,7 @@ func (s *Server) handleDeleteModelProvider(c *gin.Context) {
 		c.JSON(404, gin.H{"error": "映射不存在"})
 		return
 	}
-	go s.cache.Reload()
+	s.debouncedCache.Reload()
 	c.JSON(200, gin.H{"message": "删除成功"})
 }
 
@@ -1112,6 +1274,62 @@ func (s *Server) handleAdminStats(c *gin.Context) {
 		"stats":            stats,
 		"model_ranking":    modelRanking,
 		"provider_ranking": providerRanking,
+	})
+}
+
+// ==================== 7.1 审计日志接口 ====================
+
+// handleListAuditLogs 查询审计日志（分页 + 过滤）
+// 支持过滤参数：action（操作类型）、target_type（对象类型）、operator_name（操作者用户名）、
+// start_time / end_time（时间范围）
+func (s *Server) handleListAuditLogs(c *gin.Context) {
+	page := s.getPage(c)
+	pageSize := s.getPageSize(c)
+
+	query := s.db.Model(&database.AuditLog{})
+
+	// 过滤：操作类型
+	if action := c.Query("action"); action != "" {
+		query = query.Where("action = ?", action)
+	}
+
+	// 过滤：对象类型
+	if targetType := c.Query("target_type"); targetType != "" {
+		query = query.Where("target_type = ?", targetType)
+	}
+
+	// 过滤：操作者用户名（模糊匹配）
+	if operatorName := c.Query("operator_name"); operatorName != "" {
+		query = query.Where("operator_name LIKE ?", "%"+operatorName+"%")
+	}
+
+	// 过滤：时间范围
+	if startTime := c.Query("start_time"); startTime != "" {
+		if t, err := time.Parse("2006-01-02", startTime); err == nil {
+			query = query.Where("created_at >= ?", t)
+		}
+	}
+	if endTime := c.Query("end_time"); endTime != "" {
+		if t, err := time.Parse("2006-01-02", endTime); err == nil {
+			// 结束时间包含当天，所以加一天
+			query = query.Where("created_at < ?", t.AddDate(0, 0, 1))
+		}
+	}
+
+	var total int64
+	query.Count(&total)
+
+	var logs []database.AuditLog
+	query.Order("created_at DESC").
+		Offset((page - 1) * pageSize).
+		Limit(pageSize).
+		Find(&logs)
+
+	c.JSON(200, gin.H{
+		"items":     logs,
+		"total":     total,
+		"page":      page,
+		"page_size": pageSize,
 	})
 }
 

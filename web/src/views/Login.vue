@@ -2,7 +2,9 @@
   <div class="login-container">
     <div class="login-card">
       <div class="login-header">
-        <el-icon :size="40" color="#667eea"><Cpu /></el-icon>
+        <el-icon :size="40" color="#667eea">
+          <Cpu />
+        </el-icon>
         <h2>Token Factory</h2>
         <p>企业级LLM API代理中心</p>
       </div>
@@ -11,10 +13,12 @@
           <el-input v-model="form.username" placeholder="用户名" prefix-icon="User" size="large" />
         </el-form-item>
         <el-form-item prop="password">
-          <el-input v-model="form.password" type="password" placeholder="密码" prefix-icon="Lock" size="large" show-password @keyup.enter="handleLogin" />
+          <el-input v-model="form.password" type="password" placeholder="密码" prefix-icon="Lock" size="large"
+            show-password @keyup.enter="handleLogin" />
         </el-form-item>
         <el-form-item>
-          <el-button type="primary" size="large" style="width: 100%;" :loading="loading" @click="handleLogin">登录</el-button>
+          <el-button type="primary" size="large" style="width: 100%;" :loading="loading"
+            @click="handleLogin">登录</el-button>
         </el-form-item>
       </el-form>
       <div class="login-footer">
@@ -83,6 +87,7 @@ async function handleLogin() {
   justify-content: center;
   min-height: calc(100vh - 100px);
 }
+
 .login-card {
   width: 400px;
   padding: 40px;
@@ -90,18 +95,22 @@ async function handleLogin() {
   border-radius: 12px;
   box-shadow: 0 4px 24px rgba(0, 0, 0, 0.08);
 }
+
 .login-header {
   text-align: center;
   margin-bottom: 32px;
 }
+
 .login-header h2 {
   margin: 12px 0 4px;
   color: #303133;
 }
+
 .login-header p {
   color: #909399;
   font-size: 14px;
 }
+
 .login-footer {
   text-align: center;
   margin-top: 16px;

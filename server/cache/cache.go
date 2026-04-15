@@ -6,6 +6,7 @@ import (
 	"math/rand"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"token_factory/database"
 
@@ -63,7 +64,7 @@ type Cache struct {
 	// 供应商选择策略相关
 	rrCounters  map[uint]*uint64 // model_id -> 轮询计数器（原子操作）
 	rrMu        sync.Mutex       // 保护 rrCounters 的创建
-	affinityMap map[string]uint  // "userID_modelID" -> providerID，会话亲和性
+	affinityMap map[string]uint  //	"userID_modelID" -> providerID，会话亲和性
 	affinityMu  sync.RWMutex     // 保护 affinityMap
 }
 
@@ -379,4 +380,40 @@ func (c *Cache) GetEncryptionKey() string {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	return c.encryptionKey
+}
+
+// ==================== 4.3 修复：防抖缓存 ====================
+
+// DebouncedCache 防抖缓存包装器
+// 短时间内多次调用 Reload 时，仅执行最后一次，避免频繁全量重载缓存
+// 典型场景：批量创建/删除映射时，短时间内多次触发 Reload
+type DebouncedCache struct {
+	cache *Cache
+	timer *time.Timer
+	mu    sync.Mutex
+	delay time.Duration
+}
+
+// NewDebouncedCache 创建防抖缓存包装器
+// delay: 防抖延迟时间，在此时间窗口内的多次Reload调用仅执行最后一次
+func NewDebouncedCache(cache *Cache, delay time.Duration) *DebouncedCache {
+	return &DebouncedCache{
+		cache: cache,
+		delay: delay,
+	}
+}
+
+// Reload 防抖重载：取消之前的延迟定时器，重新设置新的定时器
+// 只有当距离上次调用超过 delay 时间后，才会真正执行缓存重载
+func (d *DebouncedCache) Reload() {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.timer != nil {
+		d.timer.Stop()
+	}
+	d.timer = time.AfterFunc(d.delay, func() {
+		if err := d.cache.Reload(); err != nil {
+			log.Printf("[缓存] 防抖重载失败: %v", err)
+		}
+	})
 }

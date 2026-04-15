@@ -10,7 +10,9 @@
           <el-radio-button label="month">本月</el-radio-button>
         </el-radio-group>
         <el-button size="small" @click="reloadCache" style="margin-left: 12px;">
-          <el-icon><Refresh /></el-icon> 刷新缓存
+          <el-icon>
+            <Refresh />
+          </el-icon> 刷新缓存
         </el-button>
       </div>
     </div>
@@ -115,13 +117,16 @@ onMounted(() => {
   align-items: center;
   margin-bottom: 20px;
 }
+
 .page-header h3 {
   margin: 0;
 }
+
 .filter-bar {
   display: flex;
   align-items: center;
 }
+
 .stats-row {
   background: #fff;
   border-radius: 8px;

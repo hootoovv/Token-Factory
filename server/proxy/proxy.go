@@ -17,10 +17,25 @@ import (
 
 // 常量定义
 const (
-	MaxRequestBodySize   = 50 * 1024 * 1024 // 2.9 修复：请求体最大50MB
-	MaxProviderAttempts  = 3                 // 最大供应商尝试次数
-	DefaultProxyTimeout  = 30 * time.Second  // 默认代理超时
+	MaxRequestBodySize  = 50 * 1024 * 1024 // 2.9 修复：请求体最大50MB
+	MaxProviderAttempts = 3                // 最大供应商尝试次数
+	DefaultProxyTimeout = 30 * time.Second // 默认代理超时
 )
+
+// 4.2 修复：使用全局HTTP连接池复用连接，避免每次请求都创建新的http.Client
+// 全局连接池配置：MaxIdleConns=100, MaxIdleConnsPerHost=20, IdleConnTimeout=90s
+var proxyTransport = &http.Transport{
+	MaxIdleConns:        100,
+	MaxIdleConnsPerHost: 20,
+	IdleConnTimeout:     90 * time.Second,
+	DisableKeepAlives:   false,
+}
+
+// proxyClient 全局HTTP客户端，复用连接池
+var proxyClient = &http.Client{
+	Timeout:   60 * time.Second,
+	Transport: proxyTransport,
+}
 
 // Server API代理转发服务器
 type Server struct {
@@ -88,7 +103,7 @@ func (s *Server) handleProxy(w http.ResponseWriter, r *http.Request) {
 	apiKey := extractAPIKey(r)
 	keyInfo := s.cache.GetAPIKeyInfo(apiKey)
 	if keyInfo == nil {
-		http.Error(w, `{"error":{"message":"Invalid API key","type":"auth_error"}}`, http.StatusUnauthorized)
+		http.Error(w, `{"error":{"message":"Invalid API	key","type":"auth_error"}}`, http.StatusUnauthorized)
 		return
 	}
 
@@ -181,14 +196,17 @@ func (s *Server) handleProxy(w http.ResponseWriter, r *http.Request) {
 		proxyReq.Header.Set("Authorization", "Bearer "+provider.APIKey)
 		proxyReq.Header.Set("Content-Type", "application/json")
 
-		// 发送请求（带超时）
+		// 4.2 修复：使用全局连接池发送请求，复用TCP连接和TLS会话
+		// 通过context设置单次请求超时，避免修改全局客户端的Timeout属性
 		timeout := time.Duration(provider.Timeout) * time.Second
 		if timeout == 0 {
 			timeout = DefaultProxyTimeout
 		}
-		client := &http.Client{Timeout: timeout}
+		ctx, cancel := context.WithTimeout(r.Context(), timeout)
+		proxyReq = proxyReq.WithContext(ctx)
 
-		resp, err = client.Do(proxyReq)
+		resp, err = proxyClient.Do(proxyReq)
+		cancel() // 立即释放context资源，不使用defer（在循环中defer会延迟到函数返回）
 		if err != nil {
 			lastErr = err
 			log.Printf("[代理] 请求供应商 %s (模型: %s) 失败: %v", provider.ProviderName, provider.ProviderModelName, err)

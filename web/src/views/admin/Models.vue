@@ -3,17 +3,15 @@
     <div class="page-header">
       <h3>模型管理</h3>
       <el-button type="primary" @click="showCreateModelDialog">
-        <el-icon><Plus /></el-icon> 新建模型
+        <el-icon>
+          <Plus />
+        </el-icon> 新建模型
       </el-button>
     </div>
 
     <!-- 模型列表 - Collapse -->
-    <el-collapse v-model="activeCollapse" class="model-collapse">
-      <el-collapse-item
-        v-for="model in models"
-        :key="model.id"
-        :name="model.id"
-      >
+    <el-collapse v-if="models.length > 0" v-model="activeCollapse" class="model-collapse">
+      <el-collapse-item v-for="model in models" :key="model.id" :name="model.id">
         <!-- 自定义标题 -->
         <template #title>
           <div class="collapse-title">
@@ -26,13 +24,19 @@
             </div>
             <div class="collapse-title-right" @click.stop>
               <el-button size="small" text @click="editModel(model)">
-                <el-icon><Edit /></el-icon> 编辑
+                <el-icon>
+                  <Edit />
+                </el-icon> 编辑
               </el-button>
               <el-button size="small" text type="danger" @click="deleteModel(model)">
-                <el-icon><Delete /></el-icon> 删除
+                <el-icon>
+                  <Delete />
+                </el-icon> 删除
               </el-button>
               <el-button size="small" text type="primary" @click="addProviderRow(model)">
-                <el-icon><Plus /></el-icon> 添加供应商
+                <el-icon>
+                  <Plus />
+                </el-icon> 添加供应商
               </el-button>
             </div>
           </div>
@@ -43,59 +47,27 @@
           <div v-if="getModelProviders(model.id).length === 0 && !hasNewRow(model.id)" class="empty-tip">
             暂无关联供应商，点击"添加供应商"按钮添加
           </div>
-          <div
-            v-for="mp in getModelProviders(model.id)"
-            :key="mp.id"
-            class="provider-row"
-          >
-            <el-select
-              :model-value="mp.provider_id"
-              placeholder="选择供应商"
-              class="provider-select"
-              @change="(val: number) => updateMappingProvider(mp, val)"
-            >
-              <el-option
-                v-for="p in providers"
-                :key="p.id"
-                :label="p.name"
-                :value="p.id"
-              />
+          <div v-for="mp in getModelProviders(model.id)" :key="mp.id" class="provider-row">
+            <el-select :model-value="mp.provider_id" placeholder="选择供应商" class="provider-select"
+              @change="(val: number) => updateMappingProvider(mp, val)">
+              <el-option v-for="p in providers" :key="p.id" :label="p.name" :value="p.id" />
             </el-select>
-            <el-input
-              :model-value="mp.provider_model_name"
-              placeholder="供应商侧模型名称"
-              class="model-name-input"
-              @change="(val: string) => updateMappingModelName(mp, val)"
-            />
-            <el-button
-              size="small"
-              type="danger"
-              text
-              @click="deleteMapping(mp)"
-            >
-              <el-icon><Delete /></el-icon> 删除
+            <el-input :model-value="mp.provider_model_name" placeholder="供应商侧模型名称" class="model-name-input"
+              @change="(val: string) => updateMappingModelName(mp, val)" />
+            <el-button size="small" type="danger" text @click="deleteMapping(mp)">
+              <el-icon>
+                <Delete />
+              </el-icon> 删除
             </el-button>
           </div>
 
           <!-- 新增供应商行 -->
           <div v-if="hasNewRow(model.id)" class="provider-row new-provider-row">
-            <el-select
-              v-model="newRowData[model.id].provider_id"
-              placeholder="选择供应商"
-              class="provider-select"
-            >
-              <el-option
-                v-for="p in providers"
-                :key="p.id"
-                :label="p.name"
-                :value="p.id"
-              />
+            <el-select v-model="newRowData[model.id].provider_id" placeholder="选择供应商" class="provider-select">
+              <el-option v-for="p in providers" :key="p.id" :label="p.name" :value="p.id" />
             </el-select>
-            <el-input
-              v-model="newRowData[model.id].provider_model_name"
-              placeholder="供应商侧模型名称"
-              class="model-name-input"
-            />
+            <el-input v-model="newRowData[model.id].provider_model_name" placeholder="供应商侧模型名称"
+              class="model-name-input" />
             <el-button size="small" type="primary" @click="submitNewProvider(model.id)">
               确认
             </el-button>
@@ -169,13 +141,13 @@ function getModelProviders(modelId: number) {
 async function fetchData() {
   try {
     const [modelsRes, providersRes, mappingsRes] = await Promise.all([
-      adminModelApi.list(),
-      adminProviderApi.list(),
-      adminModelProviderApi.list(),
+      adminModelApi.list({ page: 1, page_size: 1000 }),
+      adminProviderApi.list({ page: 1, page_size: 1000 }),
+      adminModelProviderApi.list({ page: 1, page_size: 1000 }),
     ])
-    models.value = modelsRes.data || []
-    providers.value = providersRes.data || []
-    mappings.value = mappingsRes.data || []
+    models.value = modelsRes.data.items || []
+    providers.value = providersRes.data.items || []
+    mappings.value = mappingsRes.data.items || []
     // 默认展开所有折叠面板
     activeCollapse.value = models.value.map((m: any) => m.id)
   } catch (e) {
@@ -329,6 +301,7 @@ onMounted(() => {
   align-items: center;
   margin-bottom: 20px;
 }
+
 .page-header h3 {
   margin: 0;
 }
