@@ -19,13 +19,14 @@ type JWTClaims struct {
 }
 
 // GenerateToken 生成JWT Token
+// 3.5 修复：将Token过期时间从24小时缩短为4小时，降低Token被窃取后的风险窗口
 func GenerateToken(userID uint, username, role string, secret []byte) (string, error) {
 	claims := JWTClaims{
 		UserID:   userID,
 		Username: username,
 		Role:     role,
 		RegisteredClaims: jwt.RegisteredClaims{
-			ExpiresAt: jwt.NewNumericDate(time.Now().Add(24 * time.Hour)),
+			ExpiresAt: jwt.NewNumericDate(time.Now().Add(4 * time.Hour)), // 3.5 修复：4小时过期
 			IssuedAt:  jwt.NewNumericDate(time.Now()),
 			Issuer:    "token-factory",
 		},

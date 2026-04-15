@@ -10,6 +10,13 @@
         </div>
         <div class="header-right">
           <template v-if="userStore.isLoggedIn">
+            <!-- 3.4 修复：导航中添加"主页"和"仪表板"入口 -->
+            <el-button text class="nav-btn" @click="$router.push('/')">
+              <el-icon><HomeFilled /></el-icon> 主页
+            </el-button>
+            <el-button text class="nav-btn" @click="$router.push('/dashboard')">
+              <el-icon><DataAnalysis /></el-icon> 仪表板
+            </el-button>
             <el-dropdown @command="handleCommand">
               <span class="user-dropdown">
                 <el-icon><User /></el-icon>
@@ -18,7 +25,6 @@
               </span>
               <template #dropdown>
                 <el-dropdown-menu>
-                  <el-dropdown-item command="dashboard">仪表盘</el-dropdown-item>
                   <el-dropdown-item v-if="userStore.isAdmin" command="admin">管理后台</el-dropdown-item>
                   <el-dropdown-item command="user">个人中心</el-dropdown-item>
                   <el-dropdown-item divided command="logout">退出登录</el-dropdown-item>
@@ -47,9 +53,6 @@ const router = useRouter()
 
 function handleCommand(command: string) {
   switch (command) {
-    case 'dashboard':
-      router.push('/')
-      break
     case 'admin':
       router.push('/admin')
       break
@@ -96,6 +99,16 @@ function goLogin() {
 .header-right {
   display: flex;
   align-items: center;
+  gap: 4px;
+}
+/* 3.4 修复：导航按钮样式 */
+.nav-btn {
+  color: rgba(255, 255, 255, 0.8) !important;
+  font-size: 14px;
+}
+.nav-btn:hover {
+  color: #fff !important;
+  background: rgba(255, 255, 255, 0.1) !important;
 }
 .user-dropdown {
   display: flex;
@@ -104,6 +117,7 @@ function goLogin() {
   color: #fff;
   cursor: pointer;
   font-size: 14px;
+  margin-left: 8px;
 }
 .el-main {
   padding: 20px;

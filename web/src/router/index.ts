@@ -13,6 +13,13 @@ const router = createRouter({
           component: () => import('../views/Dashboard.vue'),
         },
         {
+          // 3.4 修复：新增"我的仪表板"路由，需要登录后才能访问
+          path: 'dashboard',
+          name: 'UserDashboard',
+          component: () => import('../views/UserDashboard.vue'),
+          meta: { requiresAuth: true },
+        },
+        {
           path: 'login',
           name: 'Login',
           component: () => import('../views/Login.vue'),

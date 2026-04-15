@@ -1,31 +1,70 @@
 <template>
   <div class="dashboard-container">
-    <!-- 时间过滤 + 标题 -->
+    <!-- 3.4 修复：用户仪表板 - 显示该用户自己的数据，支持模型/供应商/用户过滤 -->
     <div class="dashboard-header">
       <div class="header-title">
-        <h2>数据概览</h2>
-        <p class="subtitle">企业级LLM API代理中心运行状态</p>
+        <h2>{{ userStore.isAdmin ? '管理仪表板' : '我的仪表板' }}</h2>
+        <p class="subtitle">{{ userStore.isAdmin ? '查看所有用户的使用数据' : '查看您的API使用数据' }}</p>
       </div>
       <div class="filter-bar">
-        <!-- 3.4 修复：主页仅保留时间过滤，不显示模型和供应商过滤器 -->
-        <el-radio-group v-model="timeFilter" @change="onTimeFilterChange" size="small">
+        <el-radio-group v-model="timeFilter" @change="onFilterChange" size="small">
           <el-radio-button label="1h">1小时</el-radio-button>
           <el-radio-button label="today">今天</el-radio-button>
           <el-radio-button label="week">本周</el-radio-button>
           <el-radio-button label="month">本月</el-radio-button>
         </el-radio-group>
-        <!-- 3.4 修复：已登录用户显示"我的仪表板"入口 -->
-        <el-button
-          v-if="userStore.isLoggedIn"
-          type="primary"
-          plain
+        <!-- 3.4 修复：用户和管理员均可使用模型和供应商过滤器 -->
+        <el-select
+          v-model="modelFilter"
+          placeholder="全部模型"
+          clearable
           size="small"
-          style="margin-left: 12px;"
-          @click="$router.push('/dashboard')"
+          style="width: 160px; margin-left: 12px;"
+          @change="onFilterChange"
         >
-          <el-icon><DataAnalysis /></el-icon> 我的仪表板
+          <el-option v-for="m in allModels" :key="m.id" :label="m.name" :value="m.id" />
+        </el-select>
+        <el-select
+          v-model="providerFilter"
+          placeholder="全部供应商"
+          clearable
+          size="small"
+          style="width: 160px; margin-left: 12px;"
+          @change="onFilterChange"
+        >
+          <el-option v-for="p in allProviders" :key="p.id" :label="p.name" :value="p.id" />
+        </el-select>
+        <!-- 3.4 修复：管理员额外显示用户过滤器 -->
+        <el-select
+          v-if="userStore.isAdmin"
+          v-model="userFilter"
+          placeholder="全部用户"
+          clearable
+          size="small"
+          style="width: 160px; margin-left: 12px;"
+          @change="onFilterChange"
+        >
+          <el-option v-for="u in allUsers" :key="u.id" :label="u.display_name || u.username" :value="u.id" />
+        </el-select>
+        <el-button text size="small" @click="$router.push('/')" style="margin-left: 12px;">
+          <el-icon><HomeFilled /></el-icon> 返回主页
         </el-button>
       </div>
+    </div>
+
+    <!-- 当前过滤提示 -->
+    <div v-if="modelFilter || providerFilter || userFilter" class="filter-tip">
+      <span>已过滤：</span>
+      <el-tag v-if="modelFilter" closable size="small" @close="clearModelFilter">
+        模型: {{ getModelName(modelFilter) }}
+      </el-tag>
+      <el-tag v-if="providerFilter" closable size="small" type="warning" @close="clearProviderFilter" style="margin-left: 6px;">
+        供应商: {{ getProviderName(providerFilter) }}
+      </el-tag>
+      <el-tag v-if="userFilter && userStore.isAdmin" closable size="small" type="danger" @close="clearUserFilter" style="margin-left: 6px;">
+        用户: {{ getUserName(userFilter) }}
+      </el-tag>
+      <el-button text size="small" @click="clearAllFilters" style="margin-left: 8px;">清除全部</el-button>
     </div>
 
     <!-- 统计卡片 -->
@@ -76,7 +115,7 @@
       </el-col>
     </el-row>
 
-    <!-- 排行和供应商状态 -->
+    <!-- 排行 -->
     <el-row :gutter="20" class="charts-row">
       <el-col :span="12">
         <el-card shadow="hover">
@@ -125,40 +164,27 @@
         </el-card>
       </el-col>
     </el-row>
-
-    <!-- 供应商实时状态 -->
-    <el-card shadow="hover" class="provider-status-card">
-      <template #header>
-        <div class="card-header">
-          <span>供应商实时状态</span>
-          <el-button text size="small" @click="fetchProviderStatus">
-            <el-icon><Refresh /></el-icon> 刷新
-          </el-button>
-        </div>
-      </template>
-      <el-table :data="providerStatus" stripe style="width: 100%">
-        <el-table-column prop="name" label="供应商" width="200" />
-        <el-table-column prop="status_text" label="状态" width="120">
-          <template #default="scope">
-            <el-tag :type="getStatusType(scope.row.status)" effect="dark" size="small">
-              {{ scope.row.status_text }}
-            </el-tag>
-          </template>
-        </el-table-column>
-        <el-table-column prop="status" label="状态码" width="120" />
-      </el-table>
-    </el-card>
   </div>
 </template>
 
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
-import { dashboardApi } from '../api'
+import { myDashboardApi } from '../api'
 import { useUserStore } from '../stores/user'
+import { useRouter } from 'vue-router'
 
 const userStore = useUserStore()
+const router = useRouter()
 
 const timeFilter = ref('1h')
+const modelFilter = ref(null as number | null)
+const providerFilter = ref(null as number | null)
+const userFilter = ref(null as number | null) // 仅管理员使用
+
+// 所有模型/供应商/用户列表（用于下拉框选项）
+const allModels = ref<any[]>([])
+const allProviders = ref<any[]>([])
+const allUsers = ref<any[]>([]) // 仅管理员有数据
 
 const stats = ref({
   total_calls: 0,
@@ -169,12 +195,47 @@ const stats = ref({
 
 const modelRanking = ref<any[]>([])
 const providerRanking = ref<any[]>([])
-const providerStatus = ref<any[]>([])
 
-// 主页显示公共数据（不带模型/供应商过滤）
+// 获取模型/供应商列表（用于过滤下拉框）
+async function fetchFilterOptions() {
+  try {
+    const [modelsRes, providersRes] = await Promise.all([
+      myDashboardApi.models(),
+      myDashboardApi.providers(),
+    ])
+    allModels.value = modelsRes.data || []
+    allProviders.value = providersRes.data || []
+
+    // 管理员额外加载用户列表
+    if (userStore.isAdmin) {
+      try {
+        const usersRes = await myDashboardApi.users()
+        allUsers.value = usersRes.data || []
+      } catch (e) {
+        console.error('获取用户列表失败', e)
+      }
+    }
+  } catch (e) {
+    console.error(e)
+  }
+}
+
+function getModelName(id: number): string {
+  return allModels.value.find(m => m.id === id)?.name || `#${id}`
+}
+
+function getProviderName(id: number): string {
+  return allProviders.value.find(p => p.id === id)?.name || `#${id}`
+}
+
+function getUserName(id: number): string {
+  return allUsers.value.find(u => u.id === id)?.display_name || allUsers.value.find(u => u.id === id)?.username || `#${id}`
+}
+
+// 带过滤参数的数据获取
 async function fetchStats() {
   try {
-    const res = await dashboardApi.stats(timeFilter.value)
+    const res = await myDashboardApi.stats(timeFilter.value, modelFilter.value, providerFilter.value, userFilter.value)
     stats.value = res.data
   } catch (e) {
     console.error(e)
@@ -183,7 +244,7 @@ async function fetchStats() {
 
 async function fetchModelRanking() {
   try {
-    const res = await dashboardApi.modelRanking(timeFilter.value)
+    const res = await myDashboardApi.modelRanking(timeFilter.value, modelFilter.value, providerFilter.value, userFilter.value)
     modelRanking.value = res.data || []
   } catch (e) {
     console.error(e)
@@ -192,17 +253,8 @@ async function fetchModelRanking() {
 
 async function fetchProviderRanking() {
   try {
-    const res = await dashboardApi.providerRanking(timeFilter.value)
+    const res = await myDashboardApi.providerRanking(timeFilter.value, modelFilter.value, providerFilter.value, userFilter.value)
     providerRanking.value = res.data || []
-  } catch (e) {
-    console.error(e)
-  }
-}
-
-async function fetchProviderStatus() {
-  try {
-    const res = await dashboardApi.providerStatus()
-    providerStatus.value = res.data || []
   } catch (e) {
     console.error(e)
   }
@@ -214,7 +266,29 @@ function fetchAllData() {
   fetchProviderRanking()
 }
 
-function onTimeFilterChange() {
+function onFilterChange() {
+  fetchAllData()
+}
+
+function clearModelFilter() {
+  modelFilter.value = null
+  fetchAllData()
+}
+
+function clearProviderFilter() {
+  providerFilter.value = null
+  fetchAllData()
+}
+
+function clearUserFilter() {
+  userFilter.value = null
+  fetchAllData()
+}
+
+function clearAllFilters() {
+  modelFilter.value = null
+  providerFilter.value = null
+  userFilter.value = null
   fetchAllData()
 }
 
@@ -243,25 +317,18 @@ function getPercentage(count: number, list: any[]): number {
   return Math.round((count / max) * 100)
 }
 
-function getStatusType(status: string): string {
-  switch (status) {
-    case 'active': return 'success'
-    case 'cooldown': return 'warning'
-    case 'arrears': return 'danger'
-    default: return 'info'
-  }
-}
-
 onMounted(() => {
+  // 3.4 修复：仪表板需要登录才能访问
+  if (!userStore.isLoggedIn) {
+    router.push('/login')
+    return
+  }
+  fetchFilterOptions()
   fetchAllData()
-  fetchProviderStatus()
   // 自动刷新
   const timer = setInterval(fetchAllData, 60000)
-  const statusTimer = setInterval(fetchProviderStatus, 30000)
-  // 组件卸载时清除
   return () => {
     clearInterval(timer)
-    clearInterval(statusTimer)
   }
 })
 </script>
@@ -290,6 +357,18 @@ onMounted(() => {
 .filter-bar {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
+  gap: 0;
+}
+.filter-tip {
+  display: flex;
+  align-items: center;
+  margin-bottom: 16px;
+  padding: 8px 12px;
+  background: #f4f4f5;
+  border-radius: 6px;
+  font-size: 13px;
+  color: #606266;
 }
 .stats-row {
   margin-bottom: 20px;
@@ -387,8 +466,5 @@ onMounted(() => {
   color: #606266;
   min-width: 60px;
   text-align: right;
-}
-.provider-status-card {
-  margin-bottom: 20px;
 }
 </style>

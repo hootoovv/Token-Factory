@@ -17,11 +17,11 @@
       <el-table-column prop="key" label="密钥" min-width="300">
         <template #default="scope">
           <div class="key-cell">
-            <code class="key-text">{{ scope.row.showFull ? scope.row.key : maskKey(scope.row.key) }}</code>
+            <code class="key-text">{{ scope.row.showFull ? getRealKey(scope.row) : maskKey(scope.row.key) }}</code>
             <el-button text size="small" @click="scope.row.showFull = !scope.row.showFull">
               {{ scope.row.showFull ? '隐藏' : '显示' }}
             </el-button>
-            <el-button text size="small" type="primary" @click="copyKey(scope.row.key)">
+            <el-button text size="small" type="primary" @click="copyKey(scope.row)">
               <el-icon><CopyDocument /></el-icon> 复制
             </el-button>
           </div>
@@ -71,9 +71,11 @@
 
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
-import { userApi } from '../../api'
+import { userApi, decryptFromTransmission } from '../../api'
+import { useUserStore } from '../../stores/user'
 import { ElMessage, ElMessageBox } from 'element-plus'
 
+const userStore = useUserStore()
 const apiKeys = ref<any[]>([])
 const createDialogVisible = ref(false)
 const newKeyName = ref('')
@@ -96,13 +98,22 @@ function regenerateKey() {
 }
 
 function maskKey(key: string): string {
-  if (!key || key.length < 10) return key
+  if (!key || key.length < 10) return key || ''
   return key.substring(0, 7) + '...' + key.substring(key.length - 4)
 }
 
 function formatDate(d: string): string {
   if (!d) return ''
   return new Date(d).toLocaleString('zh-CN')
+}
+
+// 获取解密后的真实API Key
+function getRealKey(row: any): string {
+  if (row.encrypted_key && userStore.transmissionKey) {
+    return decryptFromTransmission(row.encrypted_key, userStore.transmissionKey)
+  }
+  // 降级：如果没有加密密钥，返回脱敏值
+  return row.key || ''
 }
 
 async function fetchKeys() {
@@ -138,9 +149,14 @@ async function deleteKey(key: any) {
   } catch (e) { /* 取消 */ }
 }
 
-async function copyKey(key: string) {
+async function copyKey(row: any) {
+  const realKey = getRealKey(row)
+  if (!realKey || realKey.includes('****') || realKey.includes('...')) {
+    ElMessage.warning('无法获取完整密钥，请确认已登录')
+    return
+  }
   try {
-    await navigator.clipboard.writeText(key)
+    await navigator.clipboard.writeText(realKey)
     ElMessage.success('已复制到剪贴板')
   } catch (e) {
     ElMessage.warning('复制失败，请手动复制')

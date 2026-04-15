@@ -18,10 +18,25 @@ type ModelProviderInfo struct {
 	ProviderName      string // 供应商名称
 	ProviderModelName string // 供应商侧模型名
 	BaseURL           string
-	APIKey            string
+	APIKey            string // 3.3 修复：此字段包含解密后的明文密钥，仅用于代理请求
 	Timeout           int
 	Retry             int
 	Status            string
+}
+
+// 3.3 修复：实现fmt.Stringer接口，确保日志输出时API Key始终脱敏
+func (info ModelProviderInfo) String() string {
+	return fmt.Sprintf("ModelProviderInfo{ProviderID:%d, ProviderName:%s, ProviderModelName:%s, BaseURL:%s, APIKey:%s, Timeout:%d, Retry:%d, Status:%s}",
+		info.ProviderID, info.ProviderName, info.ProviderModelName, info.BaseURL,
+		maskSensitiveKey(info.APIKey), info.Timeout, info.Retry, info.Status)
+}
+
+// 3.3 修复：对敏感密钥进行脱敏，仅显示前4位和后4位
+func maskSensitiveKey(key string) string {
+	if len(key) <= 8 {
+		return "****"
+	}
+	return key[:4] + "****" + key[len(key)-4:]
 }
 
 // APIKeyInfo API密钥信息
@@ -43,6 +58,7 @@ type Cache struct {
 	apiKeys        map[string]*APIKeyInfo       // key string -> info
 	mu             sync.RWMutex
 	db             *gorm.DB
+	encryptionKey  string // 3.1 修复：加密密钥，用于解密数据库中的API Key
 
 	// 供应商选择策略相关
 	rrCounters  map[uint]*uint64 // model_id -> 轮询计数器（原子操作）
@@ -52,9 +68,10 @@ type Cache struct {
 }
 
 // NewCache 创建缓存并加载数据
-func NewCache(db *gorm.DB) *Cache {
+func NewCache(db *gorm.DB, encryptionKey string) *Cache {
 	c := &Cache{
 		db:             db,
+		encryptionKey:  encryptionKey,
 		providers:      make(map[uint]*database.Provider),
 		providerByName: make(map[string]*database.Provider),
 		models:         make(map[uint]*database.Model),
@@ -75,7 +92,7 @@ func (c *Cache) Reload() error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	// 加载供应商
+	// 加载供应商（3.1 修复：解密API Key）
 	var providers []database.Provider
 	if err := c.db.Find(&providers).Error; err != nil {
 		return fmt.Errorf("加载供应商失败: %w", err)
@@ -85,6 +102,13 @@ func (c *Cache) Reload() error {
 	newProviderByName := make(map[string]*database.Provider, len(providers))
 	for i := range providers {
 		p := providers[i]
+		// 3.1 修复：解密API Key供代理使用
+		decryptedKey, err := database.DecryptAPIKey(p.APIKey, c.encryptionKey)
+		if err != nil {
+			log.Printf("[缓存] 警告: 解密供应商 %s 的API Key失败: %v，将使用原始值", p.Name, err)
+			decryptedKey = p.APIKey
+		}
+		p.APIKey = decryptedKey
 		newProviders[p.ID] = &p
 		newProviderByName[p.Name] = &p
 	}
@@ -120,7 +144,7 @@ func (c *Cache) Reload() error {
 			ProviderName:      provider.Name,
 			ProviderModelName: mp.ProviderModelName,
 			BaseURL:           provider.BaseURL,
-			APIKey:            provider.APIKey,
+			APIKey:            provider.APIKey, // 3.1 修复：已在上面解密
 			Timeout:           provider.Timeout,
 			Retry:             provider.Retry,
 			Status:            provider.Status,
@@ -348,4 +372,11 @@ func (c *Cache) SetAffinity(affinityKey string, providerID uint) {
 	c.affinityMu.Lock()
 	defer c.affinityMu.Unlock()
 	c.affinityMap[affinityKey] = providerID
+}
+
+// GetEncryptionKey 获取加密密钥（供admin模块使用）
+func (c *Cache) GetEncryptionKey() string {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.encryptionKey
 }

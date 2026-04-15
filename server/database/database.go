@@ -1,6 +1,10 @@
 package database
 
 import (
+	"crypto/aes"
+	"crypto/cipher"
+	"crypto/rand"
+	"encoding/base64"
 	"fmt"
 	"log"
 	"os"
@@ -16,6 +20,9 @@ import (
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
 )
+
+// 3.1 修复：加密前缀标识，用于区分加密存储和明文存储的API Key
+const EncryptedPrefix = "enc:"
 
 // Provider 供应商模型
 type Provider struct {
@@ -87,6 +94,116 @@ type TrafficRecord struct {
 	Status      string    `gorm:"size:20" json:"status"` // success/error
 	CreatedAt   time.Time `gorm:"index" json:"created_at"`
 }
+
+// ==================== 3.1 修复：API Key 加密/解密函数 ====================
+
+// 注意：加密密钥的获取逻辑（环境变量 > 配置文件 > 不加密）已在 main.go 中统一实现，
+// 密钥通过参数传递给各模块，无需在 database 包中单独获取。
+
+// EncryptAPIKey 使用AES-256-GCM加密API Key，返回带前缀的加密字符串
+// 如果encryptionKey为空，则不加密，直接返回原文（向后兼容）
+func EncryptAPIKey(plaintext, encryptionKey string) (string, error) {
+	if encryptionKey == "" {
+		return plaintext, nil
+	}
+
+	key, err := base64.StdEncoding.DecodeString(encryptionKey)
+	if err != nil {
+		return "", fmt.Errorf("加密密钥base64解码失败: %w", err)
+	}
+
+	if len(key) != 32 {
+		return "", fmt.Errorf("加密密钥长度必须为32字节(AES-256)，当前为%d字节", len(key))
+	}
+
+	block, err := aes.NewCipher(key)
+	if err != nil {
+		return "", fmt.Errorf("创建AES密码器失败: %w", err)
+	}
+
+	gcm, err := cipher.NewGCM(block)
+	if err != nil {
+		return "", fmt.Errorf("创建GCM模式失败: %w", err)
+	}
+
+	nonce := make([]byte, gcm.NonceSize())
+	if _, err := rand.Read(nonce); err != nil {
+		return "", fmt.Errorf("生成随机nonce失败: %w", err)
+	}
+
+	ciphertext := gcm.Seal(nonce, nonce, []byte(plaintext), nil)
+	return EncryptedPrefix + base64.StdEncoding.EncodeToString(ciphertext), nil
+}
+
+// DecryptAPIKey 解密API Key，支持带加密前缀的密文和明文两种格式
+// 如果encryptionKey为空或值没有加密前缀，则直接返回原文
+func DecryptAPIKey(ciphertext, encryptionKey string) (string, error) {
+	// 没有加密前缀，视为明文（向后兼容旧数据）
+	if !hasEncryptedPrefix(ciphertext) {
+		return ciphertext, nil
+	}
+
+	if encryptionKey == "" {
+		// 数据已加密但没有密钥，无法解密
+		log.Printf("[安全] 警告: API Key已加密但未提供ENCRYPTION_KEY，无法解密")
+		return ciphertext, fmt.Errorf("API Key已加密但未提供解密密钥")
+	}
+
+	key, err := base64.StdEncoding.DecodeString(encryptionKey)
+	if err != nil {
+		return "", fmt.Errorf("加密密钥base64解码失败: %w", err)
+	}
+
+	if len(key) != 32 {
+		return "", fmt.Errorf("加密密钥长度必须为32字节(AES-256)，当前为%d字节", len(key))
+	}
+
+	// 去掉前缀
+	encodedData := ciphertext[len(EncryptedPrefix):]
+	data, err := base64.StdEncoding.DecodeString(encodedData)
+	if err != nil {
+		return "", fmt.Errorf("加密数据base64解码失败: %w", err)
+	}
+
+	block, err := aes.NewCipher(key)
+	if err != nil {
+		return "", fmt.Errorf("创建AES密码器失败: %w", err)
+	}
+
+	gcm, err := cipher.NewGCM(block)
+	if err != nil {
+		return "", fmt.Errorf("创建GCM模式失败: %w", err)
+	}
+
+	nonceSize := gcm.NonceSize()
+	if len(data) < nonceSize {
+		return "", fmt.Errorf("加密数据长度不足")
+	}
+
+	nonce, encryptedData := data[:nonceSize], data[nonceSize:]
+	plaintext, err := gcm.Open(nil, nonce, encryptedData, nil)
+	if err != nil {
+		return "", fmt.Errorf("解密失败: %w", err)
+	}
+
+	return string(plaintext), nil
+}
+
+// hasEncryptedPrefix 检查字符串是否以加密前缀开头
+func hasEncryptedPrefix(s string) bool {
+	return len(s) > len(EncryptedPrefix) && s[:len(EncryptedPrefix)] == EncryptedPrefix
+}
+
+// GenerateEncryptionKey 生成一个新的32字节AES-256加密密钥（base64编码）
+func GenerateEncryptionKey() (string, error) {
+	key := make([]byte, 32)
+	if _, err := rand.Read(key); err != nil {
+		return "", err
+	}
+	return base64.StdEncoding.EncodeToString(key), nil
+}
+
+// ==================== 数据库初始化 ====================
 
 // InitDB 初始化数据库连接
 func InitDB(cfg *config.DatabaseConfig) (*gorm.DB, error) {
@@ -184,20 +301,20 @@ func EnsureTrafficTable(db *gorm.DB, t time.Time) error {
 
 	// 创建表
 	createSQL := fmt.Sprintf(`
-        CREATE TABLE IF NOT EXISTS %s (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                api_key_id INTEGER NOT NULL DEFAULT 0,
-                user_id INTEGER NOT NULL DEFAULT 0,
-                model_id INTEGER NOT NULL DEFAULT 0,
-                provider_id INTEGER NOT NULL DEFAULT 0,
-                input_bytes INTEGER NOT NULL DEFAULT 0,
-                output_bytes INTEGER NOT NULL DEFAULT 0,
-                start_time DATETIME NOT NULL,
-                end_time DATETIME NOT NULL,
-                duration INTEGER NOT NULL DEFAULT 0,
-                status VARCHAR(20) NOT NULL DEFAULT 'success',
-                created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
-        )`, tableName)
+				CREATE TABLE IF NOT EXISTS %s (
+								id INTEGER PRIMARY KEY AUTOINCREMENT,
+								api_key_id INTEGER NOT NULL DEFAULT 0,
+								user_id INTEGER NOT NULL DEFAULT 0,
+								model_id INTEGER NOT NULL DEFAULT 0,
+								provider_id INTEGER NOT NULL DEFAULT 0,
+								input_bytes INTEGER NOT NULL DEFAULT 0,
+								output_bytes INTEGER NOT NULL DEFAULT 0,
+								start_time DATETIME NOT NULL,
+								end_time DATETIME NOT NULL,
+								duration INTEGER NOT NULL DEFAULT 0,
+								status VARCHAR(20) NOT NULL DEFAULT 'success',
+								created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+				)`, tableName)
 
 	if err := db.Exec(createSQL).Error; err != nil {
 		return err
@@ -226,26 +343,26 @@ func EnsureTrafficTableMySQL(db *gorm.DB, t time.Time) error {
 	tableName := GetTrafficTableName(t)
 
 	sql := fmt.Sprintf(`
-        CREATE TABLE IF NOT EXISTS %s (
-                id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
-                api_key_id BIGINT UNSIGNED NOT NULL DEFAULT 0,
-                user_id BIGINT UNSIGNED NOT NULL DEFAULT 0,
-                model_id BIGINT UNSIGNED NOT NULL DEFAULT 0,
-                provider_id BIGINT UNSIGNED NOT NULL DEFAULT 0,
-                input_bytes BIGINT NOT NULL DEFAULT 0,
-                output_bytes BIGINT NOT NULL DEFAULT 0,
-                start_time DATETIME(3) NOT NULL,
-                end_time DATETIME(3) NOT NULL,
-                duration BIGINT NOT NULL DEFAULT 0,
-                status VARCHAR(20) NOT NULL DEFAULT 'success',
-                created_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
-                INDEX idx_api_key_id (api_key_id),
-                INDEX idx_user_id (user_id),
-                INDEX idx_model_id (model_id),
-                INDEX idx_provider_id (provider_id),
-                INDEX idx_created_at (created_at)
-        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
-        `, tableName)
+				CREATE TABLE IF NOT EXISTS %s (
+								id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+								api_key_id BIGINT UNSIGNED NOT NULL DEFAULT 0,
+								user_id BIGINT UNSIGNED NOT NULL DEFAULT 0,
+								model_id BIGINT UNSIGNED NOT NULL DEFAULT 0,
+								provider_id BIGINT UNSIGNED NOT NULL DEFAULT 0,
+								input_bytes BIGINT NOT NULL DEFAULT 0,
+								output_bytes BIGINT NOT NULL DEFAULT 0,
+								start_time DATETIME(3) NOT NULL,
+								end_time DATETIME(3) NOT NULL,
+								duration BIGINT NOT NULL DEFAULT 0,
+								status VARCHAR(20) NOT NULL DEFAULT 'success',
+								created_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+								INDEX idx_api_key_id (api_key_id),
+								INDEX idx_user_id (user_id),
+								INDEX idx_model_id (model_id),
+								INDEX idx_provider_id (provider_id),
+								INDEX idx_created_at (created_at)
+				) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+				`, tableName)
 
 	return db.Exec(sql).Error
 }
@@ -255,26 +372,26 @@ func EnsureTrafficTablePostgres(db *gorm.DB, t time.Time) error {
 	tableName := GetTrafficTableName(t)
 
 	sql := fmt.Sprintf(`
-        CREATE TABLE IF NOT EXISTS %s (
-                id SERIAL PRIMARY KEY,
-                api_key_id INTEGER NOT NULL DEFAULT 0,
-                user_id INTEGER NOT NULL DEFAULT 0,
-                model_id INTEGER NOT NULL DEFAULT 0,
-                provider_id INTEGER NOT NULL DEFAULT 0,
-                input_bytes BIGINT NOT NULL DEFAULT 0,
-                output_bytes BIGINT NOT NULL DEFAULT 0,
-                start_time TIMESTAMPTZ NOT NULL,
-                end_time TIMESTAMPTZ NOT NULL,
-                duration BIGINT NOT NULL DEFAULT 0,
-                status VARCHAR(20) NOT NULL DEFAULT 'success',
-                created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-        );
-        CREATE INDEX IF NOT EXISTS idx_%s_api_key_id ON %s(api_key_id);
-        CREATE INDEX IF NOT EXISTS idx_%s_user_id ON %s(user_id);
-        CREATE INDEX IF NOT EXISTS idx_%s_model_id ON %s(model_id);
-        CREATE INDEX IF NOT EXISTS idx_%s_provider_id ON %s(provider_id);
-        CREATE INDEX IF NOT EXISTS idx_%s_created_at ON %s(created_at);
-        `, tableName, tableName, tableName, tableName, tableName, tableName, tableName, tableName, tableName)
+				CREATE TABLE IF NOT EXISTS %s (
+								id SERIAL PRIMARY KEY,
+								api_key_id INTEGER NOT NULL DEFAULT 0,
+								user_id INTEGER NOT NULL DEFAULT 0,
+								model_id INTEGER NOT NULL DEFAULT 0,
+								provider_id INTEGER NOT NULL DEFAULT 0,
+								input_bytes BIGINT NOT NULL DEFAULT 0,
+								output_bytes BIGINT NOT NULL DEFAULT 0,
+								start_time TIMESTAMPTZ NOT NULL,
+								end_time TIMESTAMPTZ NOT NULL,
+								duration BIGINT NOT NULL DEFAULT 0,
+								status VARCHAR(20) NOT NULL DEFAULT 'success',
+								created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+				);
+				CREATE INDEX IF NOT EXISTS idx_%s_api_key_id ON %s(api_key_id);
+				CREATE INDEX IF NOT EXISTS idx_%s_user_id ON %s(user_id);
+				CREATE INDEX IF NOT EXISTS idx_%s_model_id ON %s(model_id);
+				CREATE INDEX IF NOT EXISTS idx_%s_provider_id ON %s(provider_id);
+				CREATE INDEX IF NOT EXISTS idx_%s_created_at ON %s(created_at);
+				`, tableName, tableName, tableName, tableName, tableName, tableName, tableName, tableName, tableName)
 
 	return db.Exec(sql).Error
 }

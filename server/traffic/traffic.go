@@ -164,6 +164,7 @@ func (r *Recorder) flushBatch(items []TrafficItem) {
 type FilterParams struct {
 	ModelID    uint
 	ProviderID uint
+	UserID     uint // 3.4 修复：添加用户级过滤，支持按用户隔离数据
 }
 
 // buildWhereClause 构建公共 WHERE 子句（参数化查询，防止SQL注入）
@@ -177,6 +178,11 @@ func buildWhereClause(since time.Time, filter FilterParams) (string, []interface
 	if filter.ProviderID > 0 {
 		where += " AND provider_id = ?"
 		args = append(args, filter.ProviderID)
+	}
+	// 3.4 修复：支持按用户ID过滤
+	if filter.UserID > 0 {
+		where += " AND user_id = ?"
+		args = append(args, filter.UserID)
 	}
 	return where, args
 }

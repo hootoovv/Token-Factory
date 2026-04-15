@@ -22,7 +22,19 @@ admin:
   password: admin123
 
 # JWT密钥（为空则自动生成，重启后旧Token失效）
-jwt_secret: ""
+jwt_secret: "f7f34a1e50c2758091197b5004df6e460bf8c28ddd6204382017afc28eae90ba"
+
+# 供应商API Key加密密钥（base64编码的32字节密钥，用于AES-256-GCM加密存储）
+# 优先级：环境变量 ENCRYPTION_KEY > 此配置项 > 不加密
+# 生成方式: openssl rand -base64 32
+# 首次配置后请勿更改，否则已加密的数据将无法解密
+encryption_key: "7o1S/nW9+6vYHBjfLy0MvFSNZwISsn2e9nbZFchRbBQ="
+
+# CORS允许的来源域名，逗号分隔
+# 优先级：环境变量 CORS_ORIGINS > 此配置项 > 硬编码默认值（本地开发环境）
+# 生产环境示例: "https://your-domain.com,https://admin.your-domain.com"
+# 为空时使用默认值: http://localhost:5173,http://localhost:8080,http://127.0.0.1:5173,http://127.0.0.1:8080
+cors_origins: "*"
 
 # 代理策略配置
 proxy:

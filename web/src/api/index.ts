@@ -7,6 +7,31 @@ const api = axios.create({
   timeout: 30000,
 })
 
+// ==================== API Key 传输加密/解密 ====================
+
+/**
+ * decryptFromTransmission 使用XOR+Base64解密后端传输的加密API Key
+ * 与后端 encryptForTransmission 函数配对使用
+ * @param encrypted 后端返回的 encrypted_key 字段值（Base64编码的XOR密文）
+ * @param key 传输密钥 transmission_key
+ * @returns 解密后的明文API Key
+ */
+export function decryptFromTransmission(encrypted: string, key: string): string {
+  if (!encrypted || !key) return encrypted || ''
+  try {
+    const keyBytes = new TextEncoder().encode(key)
+    const bytes = Uint8Array.from(atob(encrypted), (c) => c.charCodeAt(0))
+    const result = new Uint8Array(bytes.length)
+    for (let i = 0; i < bytes.length; i++) {
+      result[i] = bytes[i] ^ keyBytes[i % keyBytes.length]
+    }
+    return new TextDecoder().decode(result)
+  } catch (e) {
+    console.error('解密API Key失败:', e)
+    return ''
+  }
+}
+
 // 请求拦截器 - 自动附加Token
 api.interceptors.request.use(
   (config) => {
@@ -28,6 +53,8 @@ api.interceptors.response.use(
       localStorage.removeItem('token')
       localStorage.removeItem('role')
       localStorage.removeItem('username')
+      localStorage.removeItem('displayName')
+      localStorage.removeItem('userId')
       router.push('/login')
       ElMessage.error('登录已过期，请重新登录')
     } else if (error.response?.status === 403) {
@@ -43,29 +70,52 @@ api.interceptors.response.use(
 export const authApi = {
   login: (data: { username: string; password: string }) => api.post('/login', data),
   me: () => api.get('/me'),
+  getTransmissionKey: () => api.get('/transmission-key'), // 页面刷新时重新获取传输密钥
 }
 
-// ==================== Dashboard（公开） ====================
+// ==================== Dashboard（公开 - 主页使用） ====================
 export const dashboardApi = {
-  stats: (timeFilter: string, modelId?: number | null, providerId?: number | null) => {
+  stats: (timeFilter: string) => {
     const params: Record<string, string> = { time_filter: timeFilter }
-    if (modelId) params.model_id = String(modelId)
-    if (providerId) params.provider_id = String(providerId)
     return api.get('/dashboard/stats', { params })
   },
-  modelRanking: (timeFilter: string, modelId?: number | null, providerId?: number | null) => {
+  modelRanking: (timeFilter: string) => {
     const params: Record<string, string> = { time_filter: timeFilter }
-    if (modelId) params.model_id = String(modelId)
-    if (providerId) params.provider_id = String(providerId)
     return api.get('/dashboard/model-ranking', { params })
   },
-  providerRanking: (timeFilter: string, modelId?: number | null, providerId?: number | null) => {
+  providerRanking: (timeFilter: string) => {
     const params: Record<string, string> = { time_filter: timeFilter }
-    if (modelId) params.model_id = String(modelId)
-    if (providerId) params.provider_id = String(providerId)
     return api.get('/dashboard/provider-ranking', { params })
   },
   providerStatus: () => api.get('/dashboard/provider-status'),
+  models: () => api.get('/dashboard/models'),
+  providers: () => api.get('/dashboard/providers'),
+}
+
+// ==================== 3.4 修复：用户仪表板（认证后，显示用户自己的数据） ====================
+export const myDashboardApi = {
+  stats: (timeFilter: string, modelId?: number | null, providerId?: number | null, userId?: number | null) => {
+    const params: Record<string, string> = { time_filter: timeFilter }
+    if (modelId) params.model_id = String(modelId)
+    if (providerId) params.provider_id = String(providerId)
+    if (userId) params.user_id = String(userId)
+    return api.get('/my/dashboard/stats', { params })
+  },
+  modelRanking: (timeFilter: string, modelId?: number | null, providerId?: number | null, userId?: number | null) => {
+    const params: Record<string, string> = { time_filter: timeFilter }
+    if (modelId) params.model_id = String(modelId)
+    if (providerId) params.provider_id = String(providerId)
+    if (userId) params.user_id = String(userId)
+    return api.get('/my/dashboard/model-ranking', { params })
+  },
+  providerRanking: (timeFilter: string, modelId?: number | null, providerId?: number | null, userId?: number | null) => {
+    const params: Record<string, string> = { time_filter: timeFilter }
+    if (modelId) params.model_id = String(modelId)
+    if (providerId) params.provider_id = String(providerId)
+    if (userId) params.user_id = String(userId)
+    return api.get('/my/dashboard/provider-ranking', { params })
+  },
+  users: () => api.get('/my/dashboard/users'), // 管理员获取用户列表用于过滤
   models: () => api.get('/dashboard/models'),
   providers: () => api.get('/dashboard/providers'),
 }
