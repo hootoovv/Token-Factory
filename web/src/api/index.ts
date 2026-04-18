@@ -174,6 +174,8 @@ export const adminProviderApi = {
   create: (data: any) => api.post("/providers", data),
   update: (id: number, data: any) => api.put(`/providers/${id}`, data),
   delete: (id: number) => api.delete(`/providers/${id}`),
+  test: (data: { base_url: string; api_key: string; id?: number }) =>
+    api.post("/providers/test", data),
 };
 
 // ==================== 管理员 - 模型管理 ====================
@@ -187,8 +189,7 @@ export const adminModelApi = {
 
 // ==================== 管理员 - 模型-供应商映射 ====================
 export const adminModelProviderApi = {
-  list: (params?: { page?: number; page_size?: number }) =>
-    api.get("/model-providers", { params }),
+  list: () => api.get("/model-providers"),
   create: (data: {
     model_id: number;
     provider_id: number;

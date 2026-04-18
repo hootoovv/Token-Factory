@@ -47,13 +47,13 @@
           <div v-if="getModelProviders(model.id).length === 0 && !hasNewRow(model.id)" class="empty-tip">
             暂无关联供应商，点击"添加供应商"按钮添加
           </div>
-          <div v-for="mp in getModelProviders(model.id)" :key="mp.id" class="provider-row">
-            <el-select :model-value="mp.provider_id" placeholder="选择供应商" class="provider-select"
-              @change="(val: number) => updateMappingProvider(mp, val)">
-              <el-option v-for="p in providers" :key="p.id" :label="p.name" :value="p.id" />
-            </el-select>
-            <el-input :model-value="mp.provider_model_name" placeholder="供应商侧模型名称" class="model-name-input"
-              @change="(val: string) => updateMappingModelName(mp, val)" />
+
+          <!-- 只读展示已关联的供应商 -->
+          <div v-for="mp in getModelProviders(model.id)" :key="mp.id" class="provider-row readonly-row">
+            <div class="provider-info">
+              <span class="provider-name">{{ getProviderName(mp.provider_id) }}</span>
+              <span class="provider-model-name">{{ mp.provider_model_name }}</span>
+            </div>
             <el-button size="small" type="danger" text @click="deleteMapping(mp)">
               <el-icon>
                 <Delete />
@@ -64,7 +64,7 @@
           <!-- 新增供应商行 -->
           <div v-if="hasNewRow(model.id)" class="provider-row new-provider-row">
             <el-select v-model="newRowData[model.id].provider_id" placeholder="选择供应商" class="provider-select">
-              <el-option v-for="p in providers" :key="p.id" :label="p.name" :value="p.id" />
+              <el-option v-for="p in getAvailableProviders(model.id)" :key="p.id" :label="p.name" :value="p.id" />
             </el-select>
             <el-input v-model="newRowData[model.id].provider_model_name" placeholder="供应商侧模型名称"
               class="model-name-input" />
@@ -130,12 +130,25 @@ function hasNewRow(modelId: number): boolean {
   return modelId in newRowData
 }
 
-function getProviderName(id: number): string {
-  return providers.value.find(p => p.id === id)?.name || `#${id}`
+function getProviderName(providerId: number): string {
+  const provider = providers.value.find(p => p.id === providerId)
+  return provider?.name || `未知供应商(ID: ${providerId})`
 }
 
 function getModelProviders(modelId: number) {
   return mappings.value.filter(m => m.model_id === modelId)
+}
+
+/**
+ * 获取某个模型可以添加的供应商列表（排除已关联的供应商）
+ */
+function getAvailableProviders(modelId: number) {
+  const associatedProviderIds = new Set(
+    mappings.value
+      .filter(m => m.model_id === modelId)
+      .map(m => m.provider_id)
+  )
+  return providers.value.filter(p => !associatedProviderIds.has(p.id))
 }
 
 async function fetchData() {
@@ -143,13 +156,18 @@ async function fetchData() {
     const [modelsRes, providersRes, mappingsRes] = await Promise.all([
       adminModelApi.list({ page: 1, page_size: 1000 }),
       adminProviderApi.list({ page: 1, page_size: 1000 }),
-      adminModelProviderApi.list({ page: 1, page_size: 1000 }),
+      adminModelProviderApi.list(),
     ])
     models.value = modelsRes.data.items || []
     providers.value = providersRes.data.items || []
-    mappings.value = mappingsRes.data.items || []
+    mappings.value = Array.isArray(mappingsRes.data) ? mappingsRes.data : (mappingsRes.data.items || [])
     // 默认展开所有折叠面板
     activeCollapse.value = models.value.map((m: any) => m.id)
+
+    // 清空所有未提交的新增行状态，避免数据不一致
+    Object.keys(newRowData).forEach(key => {
+      delete newRowData[Number(key)]
+    })
   } catch (e) {
     console.error(e)
   }
@@ -206,14 +224,21 @@ async function deleteModel(model: any) {
 // ============ 供应商映射操作 ============
 
 function addProviderRow(model: any) {
+  // 检查是否有可用的供应商
+  const availableProviders = getAvailableProviders(model.id)
+  if (availableProviders.length === 0) {
+    ElMessage.warning('该模型已关联所有供应商，无法继续添加')
+    return
+  }
+
   // 如果未展开，自动展开
   if (!activeCollapse.value.includes(model.id)) {
     activeCollapse.value.push(model.id)
   }
-  // 初始化新行数据，默认选中第一个供应商
-  const defaultProviderId = providers.value.length > 0 ? providers.value[0].id : 0
+
+  // 初始化新行数据，默认选中第一个可用的供应商
   newRowData[model.id] = {
-    provider_id: defaultProviderId,
+    provider_id: availableProviders[0].id,
     provider_model_name: '',
   }
 }
@@ -233,6 +258,17 @@ async function submitNewProvider(modelId: number) {
     ElMessage.warning('请输入供应商侧模型名称')
     return
   }
+
+  // 二次确认供应商是否仍然可用（防止在打开新增行后，该供应商又被其他方式关联）
+  const availableProviderIds = new Set(
+    getAvailableProviders(modelId).map(p => p.id)
+  )
+  if (!availableProviderIds.has(row.provider_id)) {
+    ElMessage.warning('该供应商已被关联，请重新选择')
+    cancelNewRow(modelId)
+    return
+  }
+
   try {
     await adminModelProviderApi.create({
       model_id: modelId,
@@ -256,37 +292,6 @@ async function deleteMapping(mapping: any) {
     ElMessage.success('映射删除成功')
     fetchData()
   } catch (e) { /* 取消 */ }
-}
-
-async function updateMappingProvider(mapping: any, newProviderId: number) {
-  // 先删除旧的，再创建新的（因为后端可能不支持 update model-provider）
-  try {
-    await adminModelProviderApi.delete(mapping.id)
-    await adminModelProviderApi.create({
-      model_id: mapping.model_id,
-      provider_id: newProviderId,
-      provider_model_name: mapping.provider_model_name,
-    })
-    ElMessage.success('供应商更新成功')
-    fetchData()
-  } catch (e) { /* 已处理 */ }
-}
-
-async function updateMappingModelName(mapping: any, newName: string) {
-  if (!newName.trim()) {
-    ElMessage.warning('模型名称不能为空')
-    return
-  }
-  try {
-    await adminModelProviderApi.delete(mapping.id)
-    await adminModelProviderApi.create({
-      model_id: mapping.model_id,
-      provider_id: mapping.provider_id,
-      provider_model_name: newName.trim(),
-    })
-    ElMessage.success('模型名称更新成功')
-    fetchData()
-  } catch (e) { /* 已处理 */ }
 }
 
 onMounted(() => {
@@ -392,6 +397,30 @@ onMounted(() => {
 
 .provider-row:hover {
   background-color: #f5f7fa;
+}
+
+/* 只读行样式 */
+.readonly-row .provider-info {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex: 1;
+}
+
+.readonly-row .provider-name {
+  width: 200px;
+  flex-shrink: 0;
+  font-size: 14px;
+  color: #303133;
+  font-weight: 500;
+  padding: 0 8px;
+}
+
+.readonly-row .provider-model-name {
+  flex: 1;
+  font-size: 14px;
+  color: #606266;
+  padding: 0 8px;
 }
 
 .provider-select {

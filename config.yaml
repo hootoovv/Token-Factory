@@ -1,0 +1,50 @@
+# Token Factory - 企业级LLM API代理中心配置文件
+
+# 代理服务监听地址（API转发端口）
+proxy_listen: "0.0.0.0:11444"
+
+# 管理端监听地址（Web管理界面）
+admin_listen: "0.0.0.0:8080"
+
+# 数据库配置
+database:
+  # 数据库类型: sqlite / mysql / postgres
+  type: sqlite
+  # 数据库连接字符串
+  # sqlite: data/token_factory.db
+  # mysql: user:password@tcp(127.0.0.1:3306)/token_factory?charset=utf8mb4&parseTime=True&loc=Local
+  # postgres: host=127.0.0.1 port=5432 user=postgres password=postgres dbname=token_factory sslmode=disable
+  dsn: "data/token_factory.db"
+
+# 默认管理员账户（仅首次启动时创建）
+admin:
+  username: admin
+  password: admin123
+
+# JWT密钥（为空则自动生成，重启后旧Token失效）
+jwt_secret: "f7f34a1e50c2758091197b5004df6e460bf8c28ddd6204382017afc28eae90ba"
+
+# 供应商API Key加密密钥（base64编码的32字节密钥，用于AES-256-GCM加密存储）
+# 优先级：环境变量 ENCRYPTION_KEY > 此配置项 > 不加密
+# 生成方式: openssl rand -base64 32
+# 首次配置后请勿更改，否则已加密的数据将无法解密
+encryption_key: "7o1S/nW9+6vYHBjfLy0MvFSNZwISsn2e9nbZFchRbBQ="
+
+# CORS允许的来源域名，逗号分隔
+# 优先级：环境变量 CORS_ORIGINS > 此配置项 > 硬编码默认值（本地开发环境）
+# 生产环境示例: "https://your-domain.com,https://admin.your-domain.com"
+# 为空时使用默认值: http://localhost:5173,http://localhost:8080,http://127.0.0.1:5173,http://127.0.0.1:8080
+cors_origins: "*"
+
+# 代理策略配置
+proxy:
+  # 供应商选择策略: sequential(顺序优先) / round-robin(负载轮询,默认) / random(随机负载均衡)
+  provider_strategy: "round-robin"
+  # 会话亲和性: 启用后同一用户的同一模型请求优先使用上次成功的供应商，提升上游prompt缓存命中率
+  session_affinity: true
+  # 供应商默认超时配置（未配置供应商超时时的回退值，单位：秒）
+  default_timeouts:
+    total: 300        # 总超时：从请求发送到响应完成的绝对最大时间（适合长文本生成）
+    connect: 10       # 连接建立超时：TCP+TLS握手完成的最大时间
+    first_token: 120  # 首Token返回超时：从请求发送完毕到收到第一个响应字节的时间
+    stream_idle: 60   # 流传输Idle超时：流式响应中两次数据传输之间的最大空闲时间
