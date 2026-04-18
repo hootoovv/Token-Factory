@@ -55,6 +55,7 @@ type Server struct {
         corsOrigins     string // CORS允许的来源，逗号分隔；环境变量优先
         frontend        embed.FS
         server          *http.Server
+        rateLimiter     *middleware.RateLimiter // 限流器，用于优雅关闭时释放资源
 }
 
 // NewServer 创建管理端服务器
@@ -75,16 +76,17 @@ func NewServer(db *gorm.DB, c *cache.Cache, r *traffic.Recorder, jwtSecret []byt
 // ==================== 请求结构体定义（2.4 字段白名单） ====================
 
 // CreateProviderReq 创建供应商请求
+// 整数字段使用指针类型，区分"用户未提供"（nil→使用默认值）和"用户明确设为0"
 type CreateProviderReq struct {
         Name              string `json:"name" binding:"required,min=1,max=100"`
         Description       string `json:"description" binding:"max=500"`
         BaseURL           string `json:"base_url" binding:"required,url,max=500"`
         APIKey            string `json:"api_key" binding:"required,max=500"`
-        Timeout           int    `json:"timeout" binding:"omitempty,min=1,max=1800"`            // 总超时秒数
-        ConnectTimeout    int    `json:"connect_timeout" binding:"omitempty,min=1,max=60"`      // 连接建立超时秒数
-        FirstTokenTimeout int    `json:"first_token_timeout" binding:"omitempty,min=1,max=300"`  // 首Token返回超时秒数
-        StreamIdleTimeout int    `json:"stream_idle_timeout" binding:"omitempty,min=1,max=120"`  // 流传输Idle超时秒数
-        Retry             int    `json:"retry" binding:"omitempty,min=0,max=10"`
+        Timeout           *int   `json:"timeout" binding:"omitempty,min=1,max=1800"`            // 总超时秒数
+        ConnectTimeout    *int   `json:"connect_timeout" binding:"omitempty,min=1,max=60"`      // 连接建立超时秒数
+        FirstTokenTimeout *int   `json:"first_token_timeout" binding:"omitempty,min=1,max=300"`  // 首Token返回超时秒数
+        StreamIdleTimeout *int   `json:"stream_idle_timeout" binding:"omitempty,min=1,max=120"`  // 流传输Idle超时秒数
+        Retry             *int   `json:"retry" binding:"min=0,max=10"`
         Status            string `json:"status" binding:"omitempty,oneof=active cooldown arrears"`
 }
 
@@ -98,7 +100,7 @@ type UpdateProviderReq struct {
         ConnectTimeout    *int    `json:"connect_timeout" binding:"omitempty,min=1,max=60"`
         FirstTokenTimeout *int    `json:"first_token_timeout" binding:"omitempty,min=1,max=300"`
         StreamIdleTimeout *int    `json:"stream_idle_timeout" binding:"omitempty,min=1,max=120"`
-        Retry             *int    `json:"retry" binding:"omitempty,min=0,max=10"`
+        Retry             *int    `json:"retry" binding:"min=0,max=10"`
         Status            *string `json:"status" binding:"omitempty,oneof=active cooldown arrears"`
 }
 
@@ -187,8 +189,8 @@ func (s *Server) Start(addr string) error {
         }))
 
         // 2.10 添加速率限制中间件
-        rateLimiter := middleware.NewRateLimiter()
-        router.Use(rateLimiter.RateLimit())
+        s.rateLimiter = middleware.NewRateLimiter()
+        router.Use(s.rateLimiter.RateLimit())
 
         // API路由
         api := router.Group("/api")
@@ -329,6 +331,10 @@ func (s *Server) Start(addr string) error {
 
 // 5.4 修复：优雅关闭管理服务器
 func (s *Server) Shutdown(ctx context.Context) error {
+        // 停止限流器后台清理协程，释放资源
+        if s.rateLimiter != nil {
+                s.rateLimiter.Stop()
+        }
         if s.server != nil {
                 return s.server.Shutdown(ctx)
         }
@@ -1222,23 +1228,31 @@ func (s *Server) handleCreateProvider(c *gin.Context) {
                 return
         }
 
-        if req.Timeout == 0 {
-                req.Timeout = DefaultProviderTimeout
+        // 处理可选整数字段的默认值
+        // 指针类型：nil 表示用户未提供，使用默认值；非 nil 使用用户提供的值（包括0）
+        timeout := DefaultProviderTimeout
+        if req.Timeout != nil {
+                timeout = *req.Timeout
         }
-        if req.ConnectTimeout == 0 {
-                req.ConnectTimeout = DefaultProviderConnectTimeout
+        connectTimeout := DefaultProviderConnectTimeout
+        if req.ConnectTimeout != nil {
+                connectTimeout = *req.ConnectTimeout
         }
-        if req.FirstTokenTimeout == 0 {
-                req.FirstTokenTimeout = DefaultProviderFirstTokenTimeout
+        firstTokenTimeout := DefaultProviderFirstTokenTimeout
+        if req.FirstTokenTimeout != nil {
+                firstTokenTimeout = *req.FirstTokenTimeout
         }
-        if req.StreamIdleTimeout == 0 {
-                req.StreamIdleTimeout = DefaultProviderStreamIdleTimeout
+        streamIdleTimeout := DefaultProviderStreamIdleTimeout
+        if req.StreamIdleTimeout != nil {
+                streamIdleTimeout = *req.StreamIdleTimeout
         }
-        if req.Retry == 0 {
-                req.Retry = DefaultProviderRetry
+        retry := DefaultProviderRetry
+        if req.Retry != nil {
+                retry = *req.Retry
         }
-        if req.Status == "" {
-                req.Status = "active"
+        status := "active"
+        if req.Status != "" {
+                status = req.Status
         }
 
         // 3.1 修复：加密API Key后再存储
@@ -1249,27 +1263,42 @@ func (s *Server) handleCreateProvider(c *gin.Context) {
                 return
         }
 
-        provider := database.Provider{
-                Name:              req.Name,
-                Description:       req.Description,
-                BaseURL:           req.BaseURL,
-                APIKey:            encryptedKey, // 存储加密后的值
-                Timeout:           req.Timeout,
-                ConnectTimeout:    req.ConnectTimeout,
-                FirstTokenTimeout: req.FirstTokenTimeout,
-                StreamIdleTimeout: req.StreamIdleTimeout,
-                Retry:             req.Retry,
-                Status:            req.Status,
+        // 修复：使用 map 而非 struct 进行 Create，彻底绕过 GORM 零值跳过机制
+        // GORM 对 struct 的 Create 会跳过零值字段（如 Retry=0），导致使用数据库默认值
+        // 使用 map[string]interface{} 时 GORM 会包含所有字段，无论是否为零值
+        createData := map[string]interface{}{
+                "name":                req.Name,
+                "description":         req.Description,
+                "base_url":           req.BaseURL,
+                "api_key":            encryptedKey,
+                "timeout":            timeout,
+                "connect_timeout":    connectTimeout,
+                "first_token_timeout": firstTokenTimeout,
+                "stream_idle_timeout": streamIdleTimeout,
+                "retry":              retry,
+                "status":             status,
         }
 
-        if err := s.db.Create(&provider).Error; err != nil {
+        if err := s.db.Table("providers").Create(createData).Error; err != nil {
                 // 3.2 修复：不泄露内部错误细节
                 log.Printf("[管理] 创建供应商失败: %v", err)
                 c.JSON(500, gin.H{"error": "创建供应商失败，请稍后重试"})
                 return
         }
 
+        // map 方式 Create 后需要回查以获取自动生成的 ID 和时间戳
+        var provider database.Provider
+        if err := s.db.Where("name = ?", req.Name).First(&provider).Error; err != nil {
+                log.Printf("[管理] 创建供应商成功但回查失败: %v", err)
+                c.JSON(500, gin.H{"error": "创建供应商失败，请稍后重试"})
+                return
+        }
+
         s.debouncedCache.Reload()
+
+        // 审计日志：记录供应商创建操作
+        s.recordAuditLog(c, "create", "provider", fmt.Sprintf("%d", provider.ID),
+                fmt.Sprintf("创建供应商: name=%s, base_url=%s, retry=%d, status=%s", provider.Name, provider.BaseURL, provider.Retry, provider.Status))
 
         // 返回时对API Key脱敏（返回用户输入的原始值脱敏，而非加密值）
         c.JSON(200, gin.H{
@@ -1342,6 +1371,42 @@ func (s *Server) handleUpdateProvider(c *gin.Context) {
         if len(updates) > 0 {
                 s.db.Model(&database.Provider{}).Where("id = ?", id).Updates(updates)
                 s.debouncedCache.Reload()
+
+                // 审计日志：记录供应商更新操作
+                updateDetail := fmt.Sprintf("更新供应商(id=%s): ", id)
+                updateFields := make([]string, 0)
+                if req.Name != nil {
+                        updateFields = append(updateFields, fmt.Sprintf("name=%s", *req.Name))
+                }
+                if req.BaseURL != nil {
+                        updateFields = append(updateFields, fmt.Sprintf("base_url=%s", *req.BaseURL))
+                }
+                if req.Timeout != nil {
+                        updateFields = append(updateFields, fmt.Sprintf("timeout=%d", *req.Timeout))
+                }
+                if req.ConnectTimeout != nil {
+                        updateFields = append(updateFields, fmt.Sprintf("connect_timeout=%d", *req.ConnectTimeout))
+                }
+                if req.FirstTokenTimeout != nil {
+                        updateFields = append(updateFields, fmt.Sprintf("first_token_timeout=%d", *req.FirstTokenTimeout))
+                }
+                if req.StreamIdleTimeout != nil {
+                        updateFields = append(updateFields, fmt.Sprintf("stream_idle_timeout=%d", *req.StreamIdleTimeout))
+                }
+                if req.Retry != nil {
+                        updateFields = append(updateFields, fmt.Sprintf("retry=%d", *req.Retry))
+                }
+                if req.Status != nil {
+                        updateFields = append(updateFields, fmt.Sprintf("status=%s", *req.Status))
+                }
+                if req.APIKey != nil {
+                        updateFields = append(updateFields, "api_key=***")
+                }
+                if req.Description != nil {
+                        updateFields = append(updateFields, "description已更新")
+                }
+                updateDetail += strings.Join(updateFields, ", ")
+                s.recordAuditLog(c, "update", "provider", id, updateDetail)
         }
         c.JSON(200, gin.H{"message": "更新成功"})
 }
@@ -1350,6 +1415,13 @@ func (s *Server) handleUpdateProvider(c *gin.Context) {
 // handleDeleteProvider 删除供应商
 func (s *Server) handleDeleteProvider(c *gin.Context) {
         id := c.Param("id")
+
+        // 先查询供应商信息用于审计日志
+        var providerInfo database.Provider
+        if err := s.db.First(&providerInfo, id).Error; err != nil {
+                c.JSON(404, gin.H{"error": "供应商不存在"})
+                return
+        }
         err := s.db.Transaction(func(tx *gorm.DB) error {
                 // 先删除相关映射
                 if err := tx.Where("provider_id = ?", id).Delete(&database.ModelProvider{}).Error; err != nil {
@@ -1375,6 +1447,11 @@ func (s *Server) handleDeleteProvider(c *gin.Context) {
                 return
         }
         s.debouncedCache.Reload()
+
+        // 审计日志：记录供应商删除操作
+        s.recordAuditLog(c, "delete", "provider", id,
+                fmt.Sprintf("删除供应商: name=%s, base_url=%s", providerInfo.Name, providerInfo.BaseURL))
+
         c.JSON(200, gin.H{"message": "删除成功"})
 }
 
@@ -1412,6 +1489,11 @@ func (s *Server) handleCreateModel(c *gin.Context) {
         }
 
         s.debouncedCache.Reload()
+
+        // 审计日志：记录模型创建操作
+        s.recordAuditLog(c, "create", "model", fmt.Sprintf("%d", model.ID),
+                fmt.Sprintf("创建模型: name=%s", model.Name))
+
         c.JSON(200, model)
 }
 
@@ -1436,6 +1518,18 @@ func (s *Server) handleUpdateModel(c *gin.Context) {
         if len(updates) > 0 {
                 s.db.Model(&database.Model{}).Where("id = ?", id).Updates(updates)
                 s.debouncedCache.Reload()
+
+                // 审计日志：记录模型更新操作
+                updateDetail := fmt.Sprintf("更新模型(id=%s): ", id)
+                updateFields := make([]string, 0)
+                if req.Name != nil {
+                        updateFields = append(updateFields, fmt.Sprintf("name=%s", *req.Name))
+                }
+                if req.Description != nil {
+                        updateFields = append(updateFields, "description已更新")
+                }
+                updateDetail += strings.Join(updateFields, ", ")
+                s.recordAuditLog(c, "update", "model", id, updateDetail)
         }
         c.JSON(200, gin.H{"message": "更新成功"})
 }
@@ -1444,6 +1538,14 @@ func (s *Server) handleUpdateModel(c *gin.Context) {
 // handleDeleteModel 删除模型
 func (s *Server) handleDeleteModel(c *gin.Context) {
         id := c.Param("id")
+
+        // 先查询模型信息用于审计日志
+        var modelInfo database.Model
+        if err := s.db.First(&modelInfo, id).Error; err != nil {
+                c.JSON(404, gin.H{"error": "模型不存在"})
+                return
+        }
+
         err := s.db.Transaction(func(tx *gorm.DB) error {
                 // 先删除相关映射
                 if err := tx.Where("model_id = ?", id).Delete(&database.ModelProvider{}).Error; err != nil {
@@ -1469,6 +1571,11 @@ func (s *Server) handleDeleteModel(c *gin.Context) {
                 return
         }
         s.debouncedCache.Reload()
+
+        // 审计日志：记录模型删除操作
+        s.recordAuditLog(c, "delete", "model", id,
+                fmt.Sprintf("删除模型: name=%s", modelInfo.Name))
+
         c.JSON(200, gin.H{"message": "删除成功"})
 }
 
@@ -1497,18 +1604,36 @@ func (s *Server) handleCreateModelProvider(c *gin.Context) {
         }
 
         s.debouncedCache.Reload()
+
+        // 审计日志：记录模型-供应商映射创建操作
+        s.recordAuditLog(c, "create", "model_provider", fmt.Sprintf("%d", mp.ID),
+                fmt.Sprintf("创建模型-供应商映射: model_id=%d, provider_id=%d, provider_model_name=%s", mp.ModelID, mp.ProviderID, mp.ProviderModelName))
+
         c.JSON(200, mp)
 }
 
 // handleDeleteModelProvider 删除模型-供应商映射
 func (s *Server) handleDeleteModelProvider(c *gin.Context) {
         id := c.Param("id")
+
+        // 先查询映射信息用于审计日志
+        var mpInfo database.ModelProvider
+        if err := s.db.First(&mpInfo, id).Error; err != nil {
+                c.JSON(404, gin.H{"error": "映射不存在"})
+                return
+        }
+
         result := s.db.Delete(&database.ModelProvider{}, id)
         if result.RowsAffected == 0 {
                 c.JSON(404, gin.H{"error": "映射不存在"})
                 return
         }
         s.debouncedCache.Reload()
+
+        // 审计日志：记录模型-供应商映射删除操作
+        s.recordAuditLog(c, "delete", "model_provider", id,
+                fmt.Sprintf("删除模型-供应商映射: model_id=%d, provider_id=%d, provider_model_name=%s", mpInfo.ModelID, mpInfo.ProviderID, mpInfo.ProviderModelName))
+
         c.JSON(200, gin.H{"message": "删除成功"})
 }
 

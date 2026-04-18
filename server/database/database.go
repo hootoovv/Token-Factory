@@ -35,7 +35,7 @@ type Provider struct {
         ConnectTimeout    int       `gorm:"default:10;column:connect_timeout" json:"connect_timeout"`    // 连接建立超时秒数（TCP+TLS握手）
         FirstTokenTimeout int       `gorm:"default:30;column:first_token_timeout" json:"first_token_timeout"` // 首Token返回超时秒数
         StreamIdleTimeout int       `gorm:"default:15;column:stream_idle_timeout" json:"stream_idle_timeout"` // 流传输Idle超时秒数
-        Retry             int       `gorm:"default:3" json:"retry"`               // 重试次数
+        Retry             int       `json:"retry"`               // 重试次数（默认值在应用层处理，避免GORM零值问题）
         Status      string    `gorm:"size:20;default:active" json:"status"` // active/cooldown/arrears
         CreatedAt   time.Time `json:"created_at"`
         UpdatedAt   time.Time `json:"updated_at"`
