@@ -144,17 +144,16 @@
           </el-button>
         </div>
       </template>
-      <el-table :data="providerStatus" stripe style="width: 100%">
-        <el-table-column prop="name" label="供应商" width="200" />
-        <el-table-column prop="status_text" label="状态" width="120">
-          <template #default="scope">
-            <el-tag :type="getStatusType(scope.row.status)" effect="dark" size="small">
-              {{ scope.row.status_text }}
+      <el-tree :data="providerStatusTree" :props="treeProps" default-expand-all :expand-on-click-node="false">
+        <template #default="{ node, data }">
+          <div class="tree-node">
+            <span class="tree-node-label">{{ data.label }}</span>
+            <el-tag v-if="data.is_key && data.status" :type="getStatusType(data.status)" effect="dark" size="small">
+              {{ data.status_text }}
             </el-tag>
-          </template>
-        </el-table-column>
-        <el-table-column prop="status" label="状态码" width="120" />
-      </el-table>
+          </div>
+        </template>
+      </el-tree>
     </el-card>
   </div>
 </template>
@@ -178,7 +177,13 @@ const stats = ref({
 const modelRanking = ref<any[]>([])
 const providerRanking = ref<any[]>([])
 const providerStatus = ref<any[]>([])
+const providerStatusTree = ref<any[]>([])
 
+// el-tree props 配置
+const treeProps = {
+  children: 'children',
+  label: 'label',
+}
 // 主页显示公共数据（不带模型/供应商过滤）
 async function fetchStats() {
   try {
@@ -211,6 +216,16 @@ async function fetchProviderStatus() {
   try {
     const res = await dashboardApi.providerStatus()
     providerStatus.value = res.data || []
+    // 构建树形数据：供应商（无状态标签） -> API Keys（带状态标签）
+    providerStatusTree.value = (res.data || []).map((p: any) => ({
+      label: p.name,
+      children: (p.api_keys || []).map((ak: any) => ({
+        label: ak.name || `Key #${ak.id}`,
+        is_key: true,
+        status: ak.status,
+        status_text: ak.status_text,
+      })),
+    }))
   } catch (e) {
     console.error(e)
   }
@@ -421,5 +436,17 @@ onMounted(() => {
 
 .provider-status-card {
   margin-bottom: 20px;
+}
+
+.tree-node {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1;
+}
+
+.tree-node-label {
+  font-size: 14px;
+  color: #303133;
 }
 </style>

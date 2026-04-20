@@ -174,8 +174,19 @@ export const adminProviderApi = {
   create: (data: any) => api.post("/providers", data),
   update: (id: number, data: any) => api.put(`/providers/${id}`, data),
   delete: (id: number) => api.delete(`/providers/${id}`),
-  test: (data: { base_url: string; api_key: string; id?: number }) =>
-    api.post("/providers/test", data),
+};
+
+// ==================== 管理员 - 供应商 API Key 管理 ====================
+export const adminProviderAPIKeyApi = {
+  list: (providerId: number) =>
+    api.get("/provider-api-keys", { params: { provider_id: providerId } }),
+  create: (data: { provider_id: number; api_key: string; name?: string; status?: string }) =>
+    api.post("/provider-api-keys", data),
+  update: (id: number, data: { name?: string; api_key?: string; status?: string }) =>
+    api.put(`/provider-api-keys/${id}`, data),
+  delete: (id: number) => api.delete(`/provider-api-keys/${id}`),
+  test: (data: { provider_id: number; provider_api_key_id?: number; api_key?: string }) =>
+    api.post("/provider-api-keys/test", data),
 };
 
 // ==================== 管理员 - 模型管理 ====================

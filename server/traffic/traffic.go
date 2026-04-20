@@ -31,16 +31,17 @@ func getRelevantTables(db *gorm.DB, since time.Time) []string {
 
 // TrafficItem 流量记录项
 type TrafficItem struct {
-	APIKeyID    uint
-	UserID      uint
-	ModelID     uint
-	ProviderID  uint
-	InputBytes  int64
-	OutputBytes int64
-	StartTime   time.Time
-	EndTime     time.Time
-	Duration    int64 // 毫秒
-	Status      string
+	APIKeyID         uint
+	UserID           uint
+	ModelID          uint
+	ProviderID       uint
+	ProviderAPIKeyID uint // 具体使用的供应商 API	Key ID
+	InputBytes       int64
+	OutputBytes      int64
+	StartTime        time.Time
+	EndTime          time.Time
+	Duration         int64 // 毫秒
+	Status           string
 }
 
 // DashboardStats Dashboard统计数据
@@ -166,9 +167,9 @@ func (r *Recorder) flushBatch(items []TrafficItem) {
 
 		// 批量插入
 		for _, item := range group {
-			sql := fmt.Sprintf(`INSERT INTO %s (api_key_id, user_id, model_id, provider_id, input_bytes, output_bytes, start_time, end_time, duration, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, tableName)
+			sql := fmt.Sprintf(`INSERT INTO %s (api_key_id, user_id, model_id, provider_id, provider_api_key_id, input_bytes, output_bytes, start_time, end_time, duration, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, tableName)
 			if err := r.db.Exec(sql,
-				item.APIKeyID, item.UserID, item.ModelID, item.ProviderID,
+				item.APIKeyID, item.UserID, item.ModelID, item.ProviderID, item.ProviderAPIKeyID,
 				item.InputBytes, item.OutputBytes,
 				item.StartTime, item.EndTime, item.Duration, item.Status,
 				item.EndTime,
