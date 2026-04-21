@@ -331,11 +331,11 @@ func streamingCopy(dst http.ResponseWriter, src io.ReadCloser, firstByte byte, i
 				if result.err == io.EOF {
 					// 正常结束
 					// log.Printf("[DEBUG] [%s] 流传输正常结束(EOF), 共%d个chunk, 总写入:%d字节, 耗时:%v",
-					//	   providerName, chunkCount, totalWritten, time.Since(copyStart))
+					//				 providerName, chunkCount, totalWritten, time.Since(copyStart))
 					return totalWritten, nil
 				}
 				// log.Printf("[DEBUG] [%s] 流读取错误(第%d个chunk, 已写:%d字节, 读耗时:%v): %v",
-				//	   providerName, chunkCount, totalWritten, readDuration, result.err)
+				//				 providerName, chunkCount, totalWritten, readDuration, result.err)
 				return totalWritten, fmt.Errorf("读取响应体失败: %w", result.err)
 			}
 
@@ -352,25 +352,95 @@ func streamingCopy(dst http.ResponseWriter, src io.ReadCloser, firstByte byte, i
 					f.Flush()
 				}
 				// log.Printf("[DEBUG] [%s] chunk#%d: 读取%d字节(耗时%v)→写入%d字节→flush(总:%d字节, 流耗时:%v)",
-				//	   providerName, chunkCount, result.n, readDuration, nw, totalWritten, time.Since(copyStart))
+				//				 providerName, chunkCount, result.n, readDuration, nw, totalWritten, time.Since(copyStart))
 			} else {
 				// log.Printf("[DEBUG] [%s] chunk#%d: Read返回0字节且无error(耗时%v, 总:%d字节)",
-				//	   providerName, chunkCount, readDuration, totalWritten)
+				//				 providerName, chunkCount, readDuration, totalWritten)
 			}
 
 		case <-time.After(idleTimeout):
 			// 流传输Idle超时：超过 idleTimeout 未收到任何数据
 			// log.Printf("[DEBUG] [%s] 流传输空闲超时触发(第%d次等待, idleTimeout=%v, 等待耗时:%v, 总已写:%d字节, 流耗时:%v)",
-			//	   providerName, chunkCount, idleTimeout, time.Since(readStart), totalWritten, time.Since(copyStart))
+			//				 providerName, chunkCount, idleTimeout, time.Since(readStart), totalWritten, time.Since(copyStart))
 			return totalWritten, fmt.Errorf("流传输空闲超时 (%v)，上游可能已停止生成", idleTimeout)
 
 		case <-totalCtx.Done():
 			// 总超时到期
 			// log.Printf("[DEBUG] [%s] 总超时context取消(第%d次等待, 等待耗时:%v, 总已写:%d字节, 流耗时:%v, ctxErr:%v)",
-			//	   providerName, chunkCount, time.Since(readStart), totalWritten, time.Since(copyStart), totalCtx.Err())
+			//				 providerName, chunkCount, time.Since(readStart), totalWritten, time.Since(copyStart), totalCtx.Err())
 			return totalWritten, fmt.Errorf("总超时到期: %w", totalCtx.Err())
 		}
 	}
+}
+
+// ==================== 错误状态分类 ====================
+
+// classifyErrorStatus 根据上游供应商的HTTP状态码和响应体内容，判断应该将 API Key 设置为什么状态
+// 返回值：应该设置的新状态（空字符串表示无需更改状态）
+// 欠费状态（arrears）不参与自动恢复，只能管理员手动恢复
+// 冷却状态（cooldown）可由后台协程自动恢复
+func classifyErrorStatus(statusCode int, errorBody string) string {
+	// ---- 欠费状态检测 ----
+	// HTTP 402 Payment Required → 明确的欠费信号
+	if statusCode == 402 {
+		return "arrears"
+	}
+
+	// HTTP 429 Too Many Requests → 可能是配额耗尽或欠费
+	// 需要检查响应体中是否包含欠费/续费相关关键词
+	if statusCode == 429 {
+		bodyLower := strings.ToLower(errorBody)
+		// 英文欠费关键词
+		arrearsKeywordsEN := []string{
+			"arrears", "payment", "billing", "overdue",
+			"subscription", "expired", "insufficient quota",
+			"quota exceeded", "plan expired", "renew",
+			"recharge", "top up", "balance",
+		}
+		// 中文欠费关键词
+		arrearsKeywordsCN := []string{
+			"欠费", "续费", "充值", "余额不足", "账户过期",
+			"套餐过期", "配额耗尽", "账单", "到期",
+		}
+		for _, kw := range arrearsKeywordsEN {
+			if strings.Contains(bodyLower, kw) {
+				return "arrears"
+			}
+		}
+		for _, kw := range arrearsKeywordsCN {
+			if strings.Contains(bodyLower, kw) {
+				return "arrears"
+			}
+		}
+		// 429 但不含欠费关键词 → 冷却（可能是速率限制）
+		return "cooldown"
+	}
+
+	// ---- 冷冻/冷却状态检测 ----
+	// 502 Bad Gateway / 504 Gateway Timeout / 503 Service Unavailable
+	// 这些通常表示供应商服务不可用，应设为冷却状态
+	if statusCode == 502 || statusCode == 503 || statusCode == 504 {
+		return "cooldown"
+	}
+
+	// ---- 401/403 → 可能是 API Key 失效 ----
+	if statusCode == 401 || statusCode == 403 {
+		bodyLower := strings.ToLower(errorBody)
+		// 检查是否包含Key失效的关键词
+		invalidKeywords := []string{
+			"invalid api key", "invalid key", "key not found",
+			"key revoked", "key disabled", "key expired",
+			"api key 无效", "密钥已失效", "密钥已撤销", "密钥过期",
+		}
+		for _, kw := range invalidKeywords {
+			if strings.Contains(bodyLower, kw) {
+				return "cooldown"
+			}
+		}
+	}
+
+	// 其他4xx/5xx错误 → 不自动修改状态，保持当前状态
+	return ""
 }
 
 // ==================== 代理请求处理 ====================
@@ -384,7 +454,7 @@ func (s *Server) handleProxy(w http.ResponseWriter, r *http.Request) {
 	apiKey := extractAPIKey(r)
 	keyInfo := s.cache.GetAPIKeyInfo(apiKey)
 	if keyInfo == nil {
-		http.Error(w, `{"error":{"message":"Invalid API	key","type":"auth_error"}}`, http.StatusUnauthorized)
+		http.Error(w, `{"error":{"message":"Invalid API key","type":"auth_error"}}`, http.StatusUnauthorized)
 		return
 	}
 
@@ -459,19 +529,19 @@ func (s *Server) handleProxy(w http.ResponseWriter, r *http.Request) {
 
 		// 构建目标URL
 		// BaseURL约定：包含完整的API基础路径含版本号，例如：
-		//   - https://integrate.api.nvidia.com/v1
-		//   - https://open.bigmodel.cn/api/paas/v4
-		//   - https://api.openai.com/v1
-		//   - http://localhost:11434/v1 (Ollama)
+		//	 - https://integrate.api.nvidia.com/v1
+		//	 - https://open.bigmodel.cn/api/paas/v4
+		//	 - https://api.openai.com/v1
+		//	 - http://localhost:11434/v1 (Ollama)
 		//
 		// 客户端发到代理的请求路径统一为 /v1/chat/completions 等格式
 		// 如果BaseURL已包含版本路径（/v1, /v2, /v4等），需要剥离请求路径中的/v1前缀
 		// 避免产生 /v4/v1/chat/completions 这样的重复路径
 		//
 		// 示例：
-		//   BaseURL=https://open.bigmodel.cn/api/paas/v4 + /v1/chat/completions → /api/paas/v4/chat/completions
-		//   BaseURL=https://integrate.api.nvidia.com/v1 + /v1/chat/completions → /v1/chat/completions
-		//   BaseURL=https://my-server.com + /v1/chat/completions → /v1/chat/completions (无版本路径，保留/v1)
+		//	 BaseURL=https://open.bigmodel.cn/api/paas/v4 + /v1/chat/completions → /api/paas/v4/chat/completions
+		//	 BaseURL=https://integrate.api.nvidia.com/v1 + /v1/chat/completions → /v1/chat/completions
+		//	 BaseURL=https://my-server.com + /v1/chat/completions → /v1/chat/completions (无版本路径，保留/v1)
 		baseURL := strings.TrimRight(provider.BaseURL, "/")
 		requestPath := r.URL.Path
 		if versionPathSuffix.MatchString(baseURL) && strings.HasPrefix(requestPath, "/v1/") {
@@ -487,7 +557,7 @@ func (s *Server) handleProxy(w http.ResponseWriter, r *http.Request) {
 		// 例如 NVIDIA API 需要 moonshotai/kimi-k2.5，而其他供应商可能只需要 kimi-k2.5
 		upstreamBody := replaceModelInBody(bodyBytes, provider.ProviderModelName)
 		// log.Printf("[DEBUG] [%s] 模型名替换: 客户端模型=%s → 供应商模型=%s, 请求体大小: %d→%d字节",
-		//	   provider.ProviderName, modelName, provider.ProviderModelName, len(bodyBytes), len(upstreamBody))
+		//				 provider.ProviderName, modelName, provider.ProviderModelName, len(bodyBytes), len(upstreamBody))
 
 		// 创建新请求
 		proxyReq, err := http.NewRequest(r.Method, targetURL, strings.NewReader(string(upstreamBody)))
@@ -515,12 +585,15 @@ func (s *Server) handleProxy(w http.ResponseWriter, r *http.Request) {
 		// 某些供应商（如NVIDIA API）要求显式设置Accept: text/event-stream才返回SSE流
 		// 如果客户端请求了stream模式，确保上游也收到正确的Accept头
 		// if proxyReq.Header.Get("Accept") == "" || strings.Contains(string(upstreamBody), "\"stream\":true") || strings.Contains(string(upstreamBody), "\"stream\": true") {
-		//	   proxyReq.Header.Set("Accept", "text/event-stream")
+		//				 proxyReq.Header.Set("Accept", "text/event-stream")
 		// }
 
 		// 创建总超时 context（绝对截止时间）
 		totalCtx, totalCancel := context.WithTimeout(r.Context(), timeouts.Total)
 		proxyReq = proxyReq.WithContext(totalCtx)
+
+		// 注册活跃请求，以便该 Key 被禁用时能立即中断
+		activeRequestID := s.cache.RegisterActiveRequest(provider.ProviderAPIKeyID, totalCancel)
 
 		// 创建带连接超时的 per-request 客户端
 		perReqClient := createPerRequestClient(timeouts.Connect)
@@ -528,15 +601,16 @@ func (s *Server) handleProxy(w http.ResponseWriter, r *http.Request) {
 		// ---- 阶段1：发送请求 + 连接建立超时 ----
 		// 连接超时由 DialContext.Timeout 控制，如果连接无法建立会快速返回错误
 		// log.Printf("[DEBUG] [%s] 开始发送请求到 %s (超时: 连接=%v, 首Token=%v, 流Idle=%v, 总=%v)",
-		//	   provider.ProviderName, targetURL, timeouts.Connect, timeouts.FirstToken, timeouts.StreamIdle, timeouts.Total)
+		//				 provider.ProviderName, targetURL, timeouts.Connect, timeouts.FirstToken, timeouts.StreamIdle, timeouts.Total)
 		// log.Printf("[DEBUG] [%s] 请求详情: Method=%s, 模型=%s→%s, 请求头: Authorization=Bearer %s, Accept=%s, Content-Type=%s",
-		//	   provider.ProviderName, r.Method, modelName, provider.ProviderModelName,
-		//	   maskAPIKey(provider.APIKey), proxyReq.Header.Get("Accept"), proxyReq.Header.Get("Content-Type"))
+		//				 provider.ProviderName, r.Method, modelName, provider.ProviderModelName,
+		//				 maskAPIKey(provider.APIKey), proxyReq.Header.Get("Accept"), proxyReq.Header.Get("Content-Type"))
 		reqStart := time.Now()
 		resp, err = perReqClient.Do(proxyReq)
 		reqDuration := time.Since(reqStart)
 		if err != nil {
 			totalCancel()
+			s.cache.UnregisterActiveRequest(provider.ProviderAPIKeyID, activeRequestID)
 			lastErr = fmt.Errorf("连接供应商失败: %w", err)
 			// 增强错误日志：检测HTTP/2握手失败等常见协议协商问题
 			errStr := err.Error()
@@ -562,11 +636,46 @@ func (s *Server) handleProxy(w http.ResponseWriter, r *http.Request) {
 			resp.Body.Close()
 			resp = nil // 重置resp，确保"所有供应商失败"的判断逻辑正确
 			totalCancel()
+			s.cache.UnregisterActiveRequest(provider.ProviderAPIKeyID, activeRequestID)
 
 			lastErr = fmt.Errorf("供应商返回HTTP %d", errStatusCode)
 			log.Printf("[代理] 供应商 %s (模型: %s) 返回错误状态 HTTP %d (Content-Type: %s, 响应体: %s, 耗时:%v), 尝试下一个供应商",
 				provider.ProviderName, provider.ProviderModelName, errStatusCode,
 				errContentType, truncateString(string(errorBody), 200), reqDuration)
+
+			// ===== 自动状态检测 =====
+			// 根据错误码和响应体内容自动判断应设置的状态
+			newStatus := classifyErrorStatus(errStatusCode, string(errorBody))
+			if newStatus != "" && newStatus != provider.Status {
+				// 欠费状态立即设置（不等待连续失败计数）
+				if newStatus == "arrears" {
+					log.Printf("[代理] 检测到 API Key(ID=%d) 欠费信号: %s → arrears (原因: HTTP %d)",
+						provider.ProviderAPIKeyID, provider.Status, errStatusCode)
+					s.cache.ResetAPIKeyFailure(provider.ProviderAPIKeyID)
+					if err := s.cache.SetProviderAPIKeyStatus(provider.ProviderAPIKeyID, "arrears"); err != nil {
+						log.Printf("[代理] 自动设置欠费状态失败: %v", err)
+					}
+				} else {
+					// 冷却状态需要连续失败N次才标记
+					failCount := s.cache.RecordAPIKeyFailure(provider.ProviderAPIKeyID)
+					if failCount == -1 {
+						log.Printf("[代理] API Key(ID=%d) 连续失败达到阈值，已自动标记为冷却 (原因: HTTP %d)",
+							provider.ProviderAPIKeyID, errStatusCode)
+					} else {
+						log.Printf("[代理] API Key(ID=%d) 第 %d 次失败 (原因: HTTP %d, 阈值: %d)",
+							provider.ProviderAPIKeyID, failCount, errStatusCode, s.cache.GetAutoStatusConfig().ConsecutiveFailures)
+					}
+				}
+			} else if newStatus == "" {
+				// 未知错误类型，也计入连续失败（防止所有错误被忽略）
+				failCount := s.cache.RecordAPIKeyFailure(provider.ProviderAPIKeyID)
+				if failCount > 0 && failCount != -1 {
+					log.Printf("[代理] API Key(ID=%d) 第 %d 次失败 (HTTP %d, 未匹配自动状态规则)",
+						provider.ProviderAPIKeyID, failCount, errStatusCode)
+				}
+			}
+			// ===== 自动状态检测结束 =====
+
 			continue
 		}
 
@@ -579,6 +688,7 @@ func (s *Server) handleProxy(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			totalCancel()
 			resp.Body.Close()
+			s.cache.UnregisterActiveRequest(provider.ProviderAPIKeyID, activeRequestID)
 			if errors.Is(err, errFirstTokenTimeout) {
 				lastErr = fmt.Errorf("首Token超时 (%v)", timeouts.FirstToken)
 				log.Printf("[代理] 供应商 %s (模型: %s) 首 Token 超时 (%v)，尝试下一个供应商 (等待耗时:%v)",
@@ -600,6 +710,9 @@ func (s *Server) handleProxy(w http.ResponseWriter, r *http.Request) {
 		log.Printf("[代理] 供应商 %s (模型: %s) 连接成功，首 Token 已接收 (首字节:0x%02x, HTTP状态:%d, 连接耗时:%v, 超时配置:总=%v/流Idle=%v)",
 			provider.ProviderName, provider.ProviderModelName, firstByte, resp.StatusCode, connectDuration, timeouts.Total, timeouts.StreamIdle)
 
+		// ===== 请求成功，重置连续失败计数 =====
+		s.cache.ResetAPIKeyFailure(provider.ProviderAPIKeyID)
+
 		// ---- 阶段B：流式传输（不可重试阶段） ----
 		// 复制响应头
 		headerCount := 0
@@ -610,8 +723,8 @@ func (s *Server) handleProxy(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		// log.Printf("[DEBUG] [%s] 已复制%d个响应头, Content-Type=%s, Transfer-Encoding=%s",
-		//	   provider.ProviderName, headerCount,
-		//	   resp.Header.Get("Content-Type"), resp.Header.Get("Transfer-Encoding"))
+		//				 provider.ProviderName, headerCount,
+		//				 resp.Header.Get("Content-Type"), resp.Header.Get("Transfer-Encoding"))
 
 		// 写入响应状态码
 		w.WriteHeader(resp.StatusCode)
@@ -621,6 +734,7 @@ func (s *Server) handleProxy(w http.ResponseWriter, r *http.Request) {
 		// streamingCopy 在流式传输中监控 idle 超时和总超时
 		outputBytes, streamCopyErr = streamingCopy(w, resp.Body, firstByte, timeouts.StreamIdle, totalCtx, provider.ProviderName)
 		totalCancel()
+		s.cache.UnregisterActiveRequest(provider.ProviderAPIKeyID, activeRequestID)
 
 		streamDuration := time.Since(startTime)
 		if streamCopyErr != nil {

@@ -1,6 +1,7 @@
 package cache
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"math/rand"
@@ -8,6 +9,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"token_factory/config"
 	"token_factory/database"
 
 	"gorm.io/gorm"
@@ -86,10 +88,19 @@ type Cache struct {
 	rrMu        sync.Mutex       // 保护 rrCounters 的创建
 	affinityMap map[string]uint  // "userID_modelID" -> providerID，会话亲和性
 	affinityMu  sync.RWMutex     // 保护 affinityMap
+
+	// API Key 自动状态管理相关
+	activeRequests   map[uint]map[uint64]context.CancelFunc // providerAPIKeyID -> requestID -> cancel 函数
+	activeRequestsMu sync.Mutex                             // 保护 activeRequests
+	activeRequestID  uint64                                 // 请求ID自增计数器（在 activeRequestsMu 保护下使用）
+	failureCounts    map[uint]int                           // providerAPIKeyID -> 连续失败计数
+	failureCountsMu  sync.Mutex                             // 保护 failureCounts
+	autoStatusCfg    config.AutoStatusConfig                // 自动状态管理配置
+	stopRecovery     chan struct{}                          // 通知冷却恢复协程停止
 }
 
 // NewCache 创建缓存并加载数据
-func NewCache(db *gorm.DB, encryptionKey string) *Cache {
+func NewCache(db *gorm.DB, encryptionKey string, autoStatusCfg config.AutoStatusConfig) *Cache {
 	c := &Cache{
 		db:              db,
 		encryptionKey:   encryptionKey,
@@ -102,6 +113,10 @@ func NewCache(db *gorm.DB, encryptionKey string) *Cache {
 		apiKeys:         make(map[string]*APIKeyInfo),
 		rrCounters:      make(map[uint]*uint64),
 		affinityMap:     make(map[string]uint),
+		activeRequests:  make(map[uint]map[uint64]context.CancelFunc),
+		failureCounts:   make(map[uint]int),
+		autoStatusCfg:   autoStatusCfg,
+		stopRecovery:    make(chan struct{}),
 	}
 	if err := c.Reload(); err != nil {
 		log.Printf("[缓存] 初始加载失败: %v", err)
@@ -449,6 +464,214 @@ func (c *Cache) GetEncryptionKey() string {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	return c.encryptionKey
+}
+
+// GetAutoStatusConfig 获取自动状态管理配置（供proxy模块使用）
+func (c *Cache) GetAutoStatusConfig() config.AutoStatusConfig {
+	return c.autoStatusCfg
+}
+
+// ==================== API Key 自动状态管理 ====================
+
+// RegisterActiveRequest 注册正在使用指定 API Key 的活跃请求
+// 当该 API Key 被禁用时，可通过 CancelActiveRequests 立即中断这些请求
+// 返回唯一的请求ID，用于后续 UnregisterActiveRequest 时移除
+func (c *Cache) RegisterActiveRequest(providerAPIKeyID uint, cancel context.CancelFunc) uint64 {
+	c.activeRequestsMu.Lock()
+	defer c.activeRequestsMu.Unlock()
+	c.activeRequestID++
+	requestID := c.activeRequestID
+	if c.activeRequests[providerAPIKeyID] == nil {
+		c.activeRequests[providerAPIKeyID] = make(map[uint64]context.CancelFunc)
+	}
+	c.activeRequests[providerAPIKeyID][requestID] = cancel
+	return requestID
+}
+
+// UnregisterActiveRequest 移除已完成的请求
+// requestID 由 RegisterActiveRequest 返回
+func (c *Cache) UnregisterActiveRequest(providerAPIKeyID uint, requestID uint64) {
+	c.activeRequestsMu.Lock()
+	defer c.activeRequestsMu.Unlock()
+	delete(c.activeRequests[providerAPIKeyID], requestID)
+	// 清理空map
+	if len(c.activeRequests[providerAPIKeyID]) == 0 {
+		delete(c.activeRequests, providerAPIKeyID)
+	}
+}
+
+// CancelActiveRequests 取消使用指定 API Key 的所有活跃请求
+// 返回被取消的请求数量
+func (c *Cache) CancelActiveRequests(providerAPIKeyID uint) int {
+	c.activeRequestsMu.Lock()
+	defer c.activeRequestsMu.Unlock()
+	cancels := c.activeRequests[providerAPIKeyID]
+	count := len(cancels)
+	for _, cancel := range cancels {
+		cancel()
+	}
+	delete(c.activeRequests, providerAPIKeyID)
+	return count
+}
+
+// SetProviderAPIKeyStatus 更新供应商 API Key 的状态（同时更新缓存和数据库）
+// 此方法是线程安全的，用于代理请求中自动检测到异常状态时实时更新
+// 如果新状态为 disabled，会同时中断所有使用该 Key 的活跃请求
+func (c *Cache) SetProviderAPIKeyStatus(providerAPIKeyID uint, newStatus string) error {
+	c.mu.Lock()
+
+	// 1. 更新数据库
+	if err := c.db.Model(&database.ProviderAPIKey{}).
+		Where("id = ?", providerAPIKeyID).
+		Update("status", newStatus).Error; err != nil {
+		c.mu.Unlock()
+		return fmt.Errorf("更新API Key状态到数据库失败: %w", err)
+	}
+
+	// 2. 更新内存缓存中的 providerAPIKeys 映射
+	for providerID, keys := range c.providerAPIKeys {
+		for i := range keys {
+			if keys[i].KeyID == providerAPIKeyID {
+				c.providerAPIKeys[providerID][i].Status = newStatus
+				break
+			}
+		}
+	}
+
+	// 3. 同步更新 modelProviders 映射中的 Status
+	for modelID, providers := range c.modelProviders {
+		for i := range providers {
+			if providers[i].ProviderAPIKeyID == providerAPIKeyID {
+				c.modelProviders[modelID][i].Status = newStatus
+				break
+			}
+		}
+	}
+
+	log.Printf("[缓存] API Key(ID=%d) 状态已自动更新为: %s", providerAPIKeyID, newStatus)
+
+	// 4. 先释放 mu 锁，再执行可能的连接中断（CancelActiveRequests 有自己的锁）
+	c.mu.Unlock()
+
+	// 5. 如果新状态为 disabled，中断所有使用该 Key 的活跃请求
+	if newStatus == "disabled" {
+		count := c.CancelActiveRequests(providerAPIKeyID)
+		if count > 0 {
+			log.Printf("[缓存] 已中断 API Key(ID=%d) 上的 %d 个活跃请求（Key 已禁用）", providerAPIKeyID, count)
+		}
+	}
+
+	return nil
+}
+
+// RecordAPIKeyFailure 记录 API Key 请求失败
+// 返回当前连续失败次数；如果达到阈值则自动标记为冷却状态并返回 -1
+// 如果自动状态管理未启用，直接返回 0
+func (c *Cache) RecordAPIKeyFailure(providerAPIKeyID uint) int {
+	if !c.autoStatusCfg.Enabled {
+		return 0
+	}
+
+	c.failureCountsMu.Lock()
+	c.failureCounts[providerAPIKeyID]++
+	count := c.failureCounts[providerAPIKeyID]
+
+	if count >= c.autoStatusCfg.ConsecutiveFailures {
+		// 达到连续失败阈值，重置计数器并标记为冷却
+		log.Printf("[缓存] API Key(ID=%d) 连续失败 %d 次（阈值=%d），自动标记为冷却状态",
+			providerAPIKeyID, count, c.autoStatusCfg.ConsecutiveFailures)
+		delete(c.failureCounts, providerAPIKeyID)
+		c.failureCountsMu.Unlock()
+		// 在锁外执行状态更新（SetProviderAPIKeyStatus 有自己的锁）
+		if err := c.SetProviderAPIKeyStatus(providerAPIKeyID, "cooldown"); err != nil {
+			log.Printf("[缓存] 自动标记冷却状态失败: %v", err)
+		}
+		return -1
+	}
+
+	c.failureCountsMu.Unlock()
+	return count
+}
+
+// ResetAPIKeyFailure 重置 API Key 的连续失败计数
+// 当请求成功时调用，避免历史偶发失败累积导致误判
+func (c *Cache) ResetAPIKeyFailure(providerAPIKeyID uint) {
+	c.failureCountsMu.Lock()
+	defer c.failureCountsMu.Unlock()
+	delete(c.failureCounts, providerAPIKeyID)
+}
+
+// StartCooldownRecovery 启动冷却状态自动恢复协程
+// 每隔 checkInterval 检查一次，对冷却时间超过 minCooldownDuration 的 Key 自动恢复为 active
+func (c *Cache) StartCooldownRecovery() {
+	if !c.autoStatusCfg.Enabled {
+		log.Printf("[缓存] 自动状态管理未启用，跳过冷却恢复协程启动")
+		return
+	}
+
+	checkInterval := time.Duration(c.autoStatusCfg.CooldownCheckInterval) * time.Second
+	minCooldown := time.Duration(c.autoStatusCfg.CooldownRecoverySec) * time.Second
+
+	go func() {
+		log.Printf("[缓存] 冷却恢复协程已启动 (检查间隔=%v, 最短冷却=%v)", checkInterval, minCooldown)
+		ticker := time.NewTicker(checkInterval)
+		defer ticker.Stop()
+
+		for {
+			select {
+			case <-ticker.C:
+				c.recoverCooldownKeys(minCooldown)
+			case <-c.stopRecovery:
+				log.Printf("[缓存] 冷却恢复协程已停止")
+				return
+			}
+		}
+	}()
+}
+
+// StopCooldownRecovery 停止冷却恢复协程
+func (c *Cache) StopCooldownRecovery() {
+	close(c.stopRecovery)
+}
+
+// recoverCooldownKeys 扫描所有冷却中的 API Key，将冷却时间超过阈值的恢复为 active
+func (c *Cache) recoverCooldownKeys(minCooldown time.Duration) {
+	c.mu.RLock()
+
+	// 收集所有冷却中的 Key ID
+	var cooldownKeyIDs []uint
+	for _, keys := range c.providerAPIKeys {
+		for _, ak := range keys {
+			if ak.Status == "cooldown" {
+				cooldownKeyIDs = append(cooldownKeyIDs, ak.KeyID)
+			}
+		}
+	}
+	c.mu.RUnlock()
+
+	if len(cooldownKeyIDs) == 0 {
+		return
+	}
+
+	now := time.Now()
+	for _, keyID := range cooldownKeyIDs {
+		// 从数据库读取 updated_at 判断冷却持续时间
+		var dbKey database.ProviderAPIKey
+		if err := c.db.Select("id, updated_at, status").First(&dbKey, keyID).Error; err != nil {
+			continue
+		}
+		// 再次确认状态（可能在读数据库期间已被手动修改）
+		if dbKey.Status != "cooldown" {
+			continue
+		}
+		if now.Sub(dbKey.UpdatedAt) >= minCooldown {
+			if err := c.SetProviderAPIKeyStatus(keyID, "active"); err != nil {
+				log.Printf("[缓存] 冷却恢复失败(API Key ID=%d): %v", keyID, err)
+			} else {
+				log.Printf("[缓存] API Key(ID=%d) 冷却超时(%v)，自动恢复为 active", keyID, minCooldown)
+			}
+		}
+	}
 }
 
 // ==================== 4.3 修复：防抖缓存 ====================

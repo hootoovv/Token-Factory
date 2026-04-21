@@ -48,3 +48,15 @@ proxy:
     connect: 10       # 连接建立超时：TCP+TLS握手完成的最大时间
     first_token: 120  # 首Token返回超时：从请求发送完毕到收到第一个响应字节的时间
     stream_idle: 60   # 流传输Idle超时：流式响应中两次数据传输之间的最大空闲时间
+
+  # API Key 自动状态管理配置
+  # 代理请求中根据上游返回的错误码和错误信息，自动标记 API Key 状态
+  auto_status:
+    # 是否启用自动状态检测（默认 true）
+    enabled: true
+    # 连续失败N次后标记为冷却状态（默认2次，防止偶发网络抖动误判）
+    consecutive_failures: 2
+    # 冷却状态自动恢复时间（秒），超过此时间后自动恢复为 active（默认300=5分钟）
+    cooldown_recovery_sec: 300
+    # 冷却恢复检查间隔（秒），后台定期扫描冷却中的 Key 并尝试恢复（默认60）
+    cooldown_check_interval: 60

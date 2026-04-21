@@ -30,13 +30,19 @@
             </div>
             <div class="collapse-title-right" @click.stop>
               <el-button size="small" text @click="editProvider(provider)">
-                <el-icon><Edit /></el-icon> 编辑
+                <el-icon>
+                  <Edit />
+                </el-icon> 编辑
               </el-button>
               <el-button size="small" text type="danger" @click="deleteProvider(provider)">
-                <el-icon><Delete /></el-icon> 删除
+                <el-icon>
+                  <Delete />
+                </el-icon> 删除
               </el-button>
               <el-button size="small" text type="primary" @click="addAPIKeyRow(provider)">
-                <el-icon><Plus /></el-icon> 添加 Key
+                <el-icon>
+                  <Plus />
+                </el-icon> 添加 Key
               </el-button>
             </div>
           </div>
@@ -49,7 +55,8 @@
           </div>
 
           <!-- 已有的 API Key 行 -->
-          <div v-for="ak in provider.api_keys || []" :key="ak.id" class="apikey-row">
+          <div v-for="ak in provider.api_keys || []" :key="ak.id" class="apikey-row"
+            :class="{ 'apikey-disabled': ak.status === 'disabled' }">
             <div class="apikey-info">
               <el-tag :type="getStatusType(ak.status)" effect="dark" size="small" class="status-tag">
                 {{ getStatusText(ak.status) }}
@@ -58,11 +65,27 @@
               <span class="apikey-value">{{ ak.api_key }}</span>
             </div>
             <div class="apikey-actions">
+              <el-button v-if="ak.status !== 'disabled'" size="small" text type="warning"
+                @click="toggleAPIKeyStatus(provider, ak, 'disabled')">
+                <el-icon>
+                  <Switch />
+                </el-icon> 禁用
+              </el-button>
+              <el-button v-if="ak.status === 'disabled'" size="small" text type="success"
+                @click="toggleAPIKeyStatus(provider, ak, 'active')">
+                <el-icon>
+                  <Open />
+                </el-icon> 启用
+              </el-button>
               <el-button size="small" text @click="editAPIKey(provider, ak)">
-                <el-icon><Edit /></el-icon> 编辑
+                <el-icon>
+                  <Edit />
+                </el-icon> 编辑
               </el-button>
               <el-button size="small" text type="danger" @click="deleteAPIKey(provider, ak)">
-                <el-icon><Delete /></el-icon> 删除
+                <el-icon>
+                  <Delete />
+                </el-icon> 删除
               </el-button>
             </div>
           </div>
@@ -70,14 +93,17 @@
           <!-- 新增 API Key 行 -->
           <div v-if="hasNewKeyRow(provider.id)" class="apikey-row new-key-row">
             <el-input v-model="newKeyData[provider.id].name" placeholder="备注名称" class="key-name-input" />
-            <el-input v-model="newKeyData[provider.id].api_key" placeholder="输入 API Key" type="password" show-password class="key-value-input" />
+            <el-input v-model="newKeyData[provider.id].api_key" placeholder="输入 API Key" type="password" show-password
+              class="key-value-input" />
             <el-select v-model="newKeyData[provider.id].status" class="key-status-select">
               <el-option label="工作中" value="active" />
               <el-option label="冷却中" value="cooldown" />
               <el-option label="欠费" value="arrears" />
+              <el-option label="已禁用" value="disabled" />
             </el-select>
             <el-button size="small" type="primary" @click="submitNewAPIKey(provider.id)">确认</el-button>
-            <el-button size="small" :loading="testingNewKeyId === provider.id" @click="testNewAPIKey(provider.id)">测试</el-button>
+            <el-button size="small" :loading="testingNewKeyId === provider.id"
+              @click="testNewAPIKey(provider.id)">测试</el-button>
             <el-button size="small" @click="cancelNewKeyRow(provider.id)">取消</el-button>
           </div>
 
@@ -85,21 +111,28 @@
           <div v-if="testResult && testResultProviderId === provider.id" class="test-result-section">
             <div class="test-result" :class="testResult.success ? 'test-success' : 'test-fail'">
               <div class="test-result-header">
-                <el-icon v-if="testResult.success" style="color: #67c23a; margin-right: 6px;"><SuccessFilled /></el-icon>
-                <el-icon v-else style="color: #f56c6c; margin-right: 6px;"><CircleCloseFilled /></el-icon>
+                <el-icon v-if="testResult.success" style="color: #67c23a; margin-right: 6px;">
+                  <SuccessFilled />
+                </el-icon>
+                <el-icon v-else style="color: #f56c6c; margin-right: 6px;">
+                  <CircleCloseFilled />
+                </el-icon>
                 <span class="test-result-title">{{ testResult.success ? '连接成功' : '连接失败' }}</span>
                 <span v-if="testResult.latency" class="test-latency">{{ testResult.latency }}ms</span>
               </div>
               <div v-if="testResult.success && testResult.message" class="test-message">{{ testResult.message }}</div>
               <div v-if="!testResult.success && testResult.error" class="test-message">{{ testResult.error }}</div>
               <div v-if="testResult.warning" class="test-warning">
-                <el-icon style="margin-right: 4px;"><WarningFilled /></el-icon>
+                <el-icon style="margin-right: 4px;">
+                  <WarningFilled />
+                </el-icon>
                 {{ testResult.warning }}
               </div>
               <div v-if="testResult.success && testResult.models && testResult.models.length > 0" class="test-models">
                 <div class="test-models-header">可用模型 ({{ testResult.model_count }})：</div>
                 <div class="test-models-list">
-                  <el-tag v-for="model in testResult.models.slice(0, 50)" :key="model" size="small" type="info" class="model-tag">
+                  <el-tag v-for="model in testResult.models.slice(0, 50)" :key="model" size="small" type="info"
+                    class="model-tag">
                     {{ model }}
                   </el-tag>
                   <el-tag v-if="testResult.models.length > 50" size="small" type="warning" class="model-tag">
@@ -182,7 +215,9 @@
             <el-option label="工作中" value="active" />
             <el-option label="冷却中" value="cooldown" />
             <el-option label="欠费" value="arrears" />
+            <el-option label="已禁用" value="disabled" />
           </el-select>
+          <span class="form-hint">禁用后该Key不再参与代理请求</span>
         </el-form-item>
       </el-form>
       <template #footer>
@@ -197,7 +232,7 @@
 import { ref, reactive, onMounted } from 'vue'
 import { adminProviderApi, adminProviderAPIKeyApi } from '../../api'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { SuccessFilled, CircleCloseFilled, WarningFilled } from '@element-plus/icons-vue'
+import { SuccessFilled, CircleCloseFilled, WarningFilled, Switch, Open } from '@element-plus/icons-vue'
 import type { FormInstance } from 'element-plus'
 
 const providers = ref<any[]>([])
@@ -255,6 +290,7 @@ function getStatusType(status: string): string {
     case 'active': return 'success'
     case 'cooldown': return 'warning'
     case 'arrears': return 'danger'
+    case 'disabled': return 'info'
     default: return 'info'
   }
 }
@@ -264,6 +300,7 @@ function getStatusText(status: string): string {
     case 'active': return '工作中'
     case 'cooldown': return '冷却中'
     case 'arrears': return '欠费'
+    case 'disabled': return '已禁用'
     default: return status
   }
 }
@@ -438,6 +475,22 @@ async function submitAPIKeyForm() {
     fetchProviders()
   } catch (e) {
     // 错误已处理
+  }
+}
+
+async function toggleAPIKeyStatus(provider: any, ak: any, newStatus: string) {
+  const action = newStatus === 'disabled' ? '禁用' : '启用'
+  try {
+    await ElMessageBox.confirm(
+      `确定${action} API Key "${ak.name || '未命名'}" 吗？${newStatus === 'disabled' ? '禁用后该Key将不再参与代理请求，正在进行的请求将被立即中断。' : '启用后该Key将重新参与代理请求。'}`,
+      `确认${action}`,
+      { type: 'warning' }
+    )
+    await adminProviderAPIKeyApi.update(ak.id, { status: newStatus })
+    ElMessage.success(`API Key 已${action}`)
+    fetchProviders()
+  } catch (e) {
+    // 取消或错误
   }
 }
 
@@ -630,6 +683,11 @@ onMounted(() => {
 
 .apikey-row:hover {
   background-color: #f5f7fa;
+}
+
+.apikey-disabled {
+  opacity: 0.5;
+  background-color: #f5f5f5;
 }
 
 .apikey-info {
