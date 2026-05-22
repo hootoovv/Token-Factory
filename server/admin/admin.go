@@ -849,7 +849,13 @@ func (s *Server) handleChangePassword(c *gin.Context) {
                 return
         }
 
-        s.db.Model(&user).Update("password", hashedPassword)
+        if err := s.db.Model(&user).Update("password", hashedPassword).Error; err != nil {
+                log.Printf("[管理] 更新密码失败: %v", err)
+                c.JSON(500, gin.H{"error": "密码修改失败，请稍后重试"})
+                return
+        }
+
+        s.recordAuditLog(c, "update", "user", fmt.Sprintf("%d", userID), "修改密码")
         c.JSON(200, gin.H{"message": "密码修改成功"})
 }
 
@@ -980,8 +986,20 @@ func (s *Server) handleUpdateUser(c *gin.Context) {
         }
 
         if len(updates) > 0 {
-                s.db.Model(&database.User{}).Where("id = ?", id).Updates(updates)
+                if err := s.db.Model(&database.User{}).Where("id = ?", id).Updates(updates).Error; err != nil {
+                        log.Printf("[管理] 更新用户失败: %v", err)
+                        c.JSON(500, gin.H{"error": "更新用户失败，请稍后重试"})
+                        return
+                }
         }
+
+        // 审计日志：记录密码重置操作
+        if _, ok := updates["password"]; ok {
+                s.recordAuditLog(c, "reset_password", "user", id, "管理员重置用户密码")
+        } else if len(updates) > 0 {
+                s.recordAuditLog(c, "update", "user", id, "管理员更新用户信息")
+        }
+
         c.JSON(200, gin.H{"message": "更新成功"})
 }
 

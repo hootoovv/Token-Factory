@@ -43,7 +43,10 @@
           <el-input v-model="passwordForm.old_password" type="password" show-password />
         </el-form-item>
         <el-form-item label="新密码">
-          <el-input v-model="passwordForm.new_password" type="password" show-password />
+          <el-input v-model="passwordForm.new_password" type="password" show-password placeholder="至少6位" />
+        </el-form-item>
+        <el-form-item label="确认新密码">
+          <el-input v-model="passwordForm.confirm_password" type="password" show-password placeholder="再次输入新密码" />
         </el-form-item>
         <el-form-item>
           <el-button type="primary" @click="changePassword">修改密码</el-button>
@@ -64,6 +67,7 @@ const stats = ref<any>({})
 const passwordForm = ref({
   old_password: '',
   new_password: '',
+  confirm_password: '',
 })
 
 function formatBytes(bytes: number): string {
@@ -92,10 +96,18 @@ async function changePassword() {
     ElMessage.warning('请填写完整')
     return
   }
+  if (passwordForm.value.new_password.length < 6) {
+    ElMessage.warning('新密码长度不能少于6位')
+    return
+  }
+  if (passwordForm.value.new_password !== passwordForm.value.confirm_password) {
+    ElMessage.warning('两次输入的新密码不一致')
+    return
+  }
   try {
     await userApi.changePassword(passwordForm.value)
     ElMessage.success('密码修改成功')
-    passwordForm.value = { old_password: '', new_password: '' }
+    passwordForm.value = { old_password: '', new_password: '', confirm_password: '' }
   } catch (e) { /* 已处理 */ }
 }
 

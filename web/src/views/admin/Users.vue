@@ -70,7 +70,10 @@
     <el-dialog v-model="resetDialogVisible" title="重置密码" width="400px">
       <el-form :model="resetForm" label-width="80px">
         <el-form-item label="新密码">
-          <el-input v-model="resetForm.password" type="password" show-password />
+          <el-input v-model="resetForm.password" type="password" show-password placeholder="至少6位" />
+        </el-form-item>
+        <el-form-item label="确认密码">
+          <el-input v-model="resetForm.confirm_password" type="password" show-password placeholder="再次输入新密码" />
         </el-form-item>
       </el-form>
       <template #footer>
@@ -112,6 +115,7 @@ const formRules = {
 
 const resetForm = ref({
   password: '',
+  confirm_password: '',
 })
 
 function formatDate(d: string): string {
@@ -173,13 +177,21 @@ async function submitForm() {
 
 function resetPassword(user: any) {
   editId.value = user.id
-  resetForm.value.password = ''
+  resetForm.value = { password: '', confirm_password: '' }
   resetDialogVisible.value = true
 }
 
 async function submitResetPassword() {
   if (!resetForm.value.password) {
     ElMessage.warning('请输入新密码')
+    return
+  }
+  if (resetForm.value.password.length < 6) {
+    ElMessage.warning('密码长度不能少于6位')
+    return
+  }
+  if (resetForm.value.password !== resetForm.value.confirm_password) {
+    ElMessage.warning('两次输入的密码不一致')
     return
   }
   try {
