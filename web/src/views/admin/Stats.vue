@@ -35,14 +35,14 @@
 
     <!-- 排行 -->
     <el-row :gutter="20" style="margin-top: 20px;">
-      <el-col :span="12">
+      <el-col :span="8">
         <el-card shadow="never">
           <template #header><span>模型使用排行</span></template>
           <el-table :data="overview.model_ranking || []" stripe size="small">
             <el-table-column type="index" label="#" width="40" />
             <el-table-column prop="name" label="模型" />
-            <el-table-column prop="count" label="调用次数" width="100" />
-            <el-table-column label="数据量" width="120">
+            <el-table-column prop="count" label="调用次数" width="90" />
+            <el-table-column label="数据量" width="100">
               <template #default="scope">
                 {{ formatBytes(scope.row.input_bytes + scope.row.output_bytes) }}
               </template>
@@ -50,14 +50,29 @@
           </el-table>
         </el-card>
       </el-col>
-      <el-col :span="12">
+      <el-col :span="8">
+        <el-card shadow="never">
+          <template #header><span>用户使用排行</span></template>
+          <el-table :data="overview.user_ranking || []" stripe size="small">
+            <el-table-column type="index" label="#" width="40" />
+            <el-table-column prop="name" label="用户" />
+            <el-table-column prop="count" label="调用次数" width="90" />
+            <el-table-column label="数据量" width="100">
+              <template #default="scope">
+                {{ formatBytes(scope.row.input_bytes + scope.row.output_bytes) }}
+              </template>
+            </el-table-column>
+          </el-table>
+        </el-card>
+      </el-col>
+      <el-col :span="8">
         <el-card shadow="never">
           <template #header><span>供应商使用排行</span></template>
           <el-table :data="overview.provider_ranking || []" stripe size="small">
             <el-table-column type="index" label="#" width="40" />
             <el-table-column prop="name" label="供应商" />
-            <el-table-column prop="count" label="调用次数" width="100" />
-            <el-table-column label="数据量" width="120">
+            <el-table-column prop="count" label="调用次数" width="90" />
+            <el-table-column label="数据量" width="100">
               <template #default="scope">
                 {{ formatBytes(scope.row.input_bytes + scope.row.output_bytes) }}
               </template>

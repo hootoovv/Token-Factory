@@ -1895,11 +1895,13 @@ func (s *Server) handleAdminStats(c *gin.Context) {
         }
 
         modelRanking, _ := traffic.GetModelRanking(s.db, since, 10, traffic.FilterParams{})
+        userRanking, _ := traffic.GetUserRanking(s.db, since, 10, traffic.FilterParams{})
         providerRanking, _ := traffic.GetProviderRanking(s.db, since, 10, traffic.FilterParams{})
 
         c.JSON(200, gin.H{
                 "stats":            stats,
                 "model_ranking":    modelRanking,
+                "user_ranking":     userRanking,
                 "provider_ranking": providerRanking,
         })
 }

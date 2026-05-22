@@ -1,13 +1,13 @@
 package traffic
 
 import (
-	"fmt"
-	"log"
-	"time"
+        "fmt"
+        "log"
+        "time"
 
-	"token_factory/database"
+        "token_factory/database"
 
-	"gorm.io/gorm"
+        "gorm.io/gorm"
 )
 
 // 4.4 修复：根据时间范围智能选择需要查询的分表
@@ -15,402 +15,437 @@ import (
 // 核心逻辑：按月分表的命名规则已知（traffic_records_YYYYMM），
 // 根据 since 参数推算从 since 所在月份到当前月份的分表即可
 func getRelevantTables(db *gorm.DB, since time.Time) []string {
-	var tables []string
-	now := time.Now()
-	// 从 since 所在月份的第1天开始遍历
-	t := time.Date(since.Year(), since.Month(), 1, 0, 0, 0, 0, since.Location())
-	for t.Before(now) || t.Equal(now) {
-		tableName := database.GetTrafficTableName(t)
-		if db.Migrator().HasTable(tableName) {
-			tables = append(tables, tableName)
-		}
-		t = t.AddDate(0, 1, 0) // 前进一个月
-	}
-	return tables
+        var tables []string
+        now := time.Now()
+        // 从 since 所在月份的第1天开始遍历
+        t := time.Date(since.Year(), since.Month(), 1, 0, 0, 0, 0, since.Location())
+        for t.Before(now) || t.Equal(now) {
+                tableName := database.GetTrafficTableName(t)
+                if db.Migrator().HasTable(tableName) {
+                        tables = append(tables, tableName)
+                }
+                t = t.AddDate(0, 1, 0) // 前进一个月
+        }
+        return tables
 }
 
 // TrafficItem 流量记录项
 type TrafficItem struct {
-	APIKeyID         uint
-	UserID           uint
-	ModelID          uint
-	ProviderID       uint
-	ProviderAPIKeyID uint // 具体使用的供应商 API	Key ID
-	InputBytes       int64
-	OutputBytes      int64
-	StartTime        time.Time
-	EndTime          time.Time
-	Duration         int64 // 毫秒
-	Status           string
+        APIKeyID         uint
+        UserID           uint
+        ModelID          uint
+        ProviderID       uint
+        ProviderAPIKeyID uint // 具体使用的供应商 API   Key ID
+        InputBytes       int64
+        OutputBytes      int64
+        StartTime        time.Time
+        EndTime          time.Time
+        Duration         int64 // 毫秒
+        Status           string
 }
 
 // DashboardStats Dashboard统计数据
 type DashboardStats struct {
-	TotalCalls       int64   `json:"total_calls"`
-	TotalInputBytes  int64   `json:"total_input_bytes"`
-	TotalOutputBytes int64   `json:"total_output_bytes"`
-	AvgDuration      float64 `json:"avg_duration"` // 平均耗时毫秒
+        TotalCalls       int64   `json:"total_calls"`
+        TotalInputBytes  int64   `json:"total_input_bytes"`
+        TotalOutputBytes int64   `json:"total_output_bytes"`
+        AvgDuration      float64 `json:"avg_duration"` // 平均耗时毫秒
 }
 
 // RankingItem 排行项
 type RankingItem struct {
-	ID          uint   `json:"id"`
-	Name        string `json:"name"`
-	Count       int64  `json:"count"`
-	InputBytes  int64  `json:"input_bytes"`
-	OutputBytes int64  `json:"output_bytes"`
+        ID          uint   `json:"id"`
+        Name        string `json:"name"`
+        Count       int64  `json:"count"`
+        InputBytes  int64  `json:"input_bytes"`
+        OutputBytes int64  `json:"output_bytes"`
 }
 
 // Recorder 流量记录器，批量写入数据库
 type Recorder struct {
-	records       chan TrafficItem
-	db            *gorm.DB
-	done          chan struct{}
-	batchSize     int
-	flushInterval time.Duration
+        records       chan TrafficItem
+        db            *gorm.DB
+        done          chan struct{}
+        batchSize     int
+        flushInterval time.Duration
 }
 
 // NewRecorder 创建流量记录器
 func NewRecorder(db *gorm.DB, bufferSize int) *Recorder {
-	return &Recorder{
-		records:       make(chan TrafficItem, bufferSize),
-		db:            db,
-		done:          make(chan struct{}),
-		batchSize:     100,
-		flushInterval: 5 * time.Second,
-	}
+        return &Recorder{
+                records:       make(chan TrafficItem, bufferSize),
+                db:            db,
+                done:          make(chan struct{}),
+                batchSize:     100,
+                flushInterval: 5 * time.Second,
+        }
 }
 
 // Start 启动后台刷新协程
 func (r *Recorder) Start() {
-	go r.run()
-	log.Printf("[流量] 记录器已启动 (缓冲: %d, 批量: %d, 刷新间隔: %s)",
-		cap(r.records), r.batchSize, r.flushInterval)
+        go r.run()
+        log.Printf("[流量] 记录器已启动 (缓冲: %d, 批量: %d, 刷新间隔: %s)",
+                cap(r.records), r.batchSize, r.flushInterval)
 }
 
 // Stop 停止记录器
 func (r *Recorder) Stop() {
-	close(r.done)
-	// 排空剩余记录
-	r.drainAndFlush()
-	log.Printf("[流量] 记录器已停止")
+        close(r.done)
+        // 排空剩余记录
+        r.drainAndFlush()
+        log.Printf("[流量] 记录器已停止")
 }
 
 // Record 记录一条流量（非阻塞，缓冲满则丢弃）
 func (r *Recorder) Record(item TrafficItem) {
-	select {
-	case r.records <- item:
-	default:
-		log.Printf("[流量] 警告: 缓冲已满，丢弃流量记录")
-	}
+        select {
+        case r.records <- item:
+        default:
+                log.Printf("[流量] 警告: 缓冲已满，丢弃流量记录")
+        }
 }
 
 func (r *Recorder) run() {
-	ticker := time.NewTicker(r.flushInterval)
-	defer ticker.Stop()
+        ticker := time.NewTicker(r.flushInterval)
+        defer ticker.Stop()
 
-	var batch []TrafficItem
+        var batch []TrafficItem
 
-	for {
-		select {
-		case <-r.done:
-			return
-		case item := <-r.records:
-			batch = append(batch, item)
-			if len(batch) >= r.batchSize {
-				r.flushBatch(batch)
-				batch = nil
-			}
-		case <-ticker.C:
-			if len(batch) > 0 {
-				r.flushBatch(batch)
-				batch = nil
-			}
-		}
-	}
+        for {
+                select {
+                case <-r.done:
+                        return
+                case item := <-r.records:
+                        batch = append(batch, item)
+                        if len(batch) >= r.batchSize {
+                                r.flushBatch(batch)
+                                batch = nil
+                        }
+                case <-ticker.C:
+                        if len(batch) > 0 {
+                                r.flushBatch(batch)
+                                batch = nil
+                        }
+                }
+        }
 }
 
 func (r *Recorder) drainAndFlush() {
-	var batch []TrafficItem
-	for {
-		select {
-		case item := <-r.records:
-			batch = append(batch, item)
-		default:
-			if len(batch) > 0 {
-				r.flushBatch(batch)
-			}
-			return
-		}
-	}
+        var batch []TrafficItem
+        for {
+                select {
+                case item := <-r.records:
+                        batch = append(batch, item)
+                default:
+                        if len(batch) > 0 {
+                                r.flushBatch(batch)
+                        }
+                        return
+                }
+        }
 }
 
 // flushBatch 将一批记录写入数据库
 func (r *Recorder) flushBatch(items []TrafficItem) {
-	if len(items) == 0 {
-		return
-	}
+        if len(items) == 0 {
+                return
+        }
 
-	// 按月份分组
-	grouped := make(map[string][]TrafficItem)
-	for _, item := range items {
-		tableName := database.GetTrafficTableName(item.EndTime)
-		grouped[tableName] = append(grouped[tableName], item)
-	}
+        // 按月份分组
+        grouped := make(map[string][]TrafficItem)
+        for _, item := range items {
+                tableName := database.GetTrafficTableName(item.EndTime)
+                grouped[tableName] = append(grouped[tableName], item)
+        }
 
-	for tableName, group := range grouped {
-		// 确保表存在
-		if err := database.EnsureTrafficTable(r.db, group[0].EndTime); err != nil {
-			log.Printf("[流量] 创建分表 %s 失败: %v", tableName, err)
-			continue
-		}
+        for tableName, group := range grouped {
+                // 确保表存在
+                if err := database.EnsureTrafficTable(r.db, group[0].EndTime); err != nil {
+                        log.Printf("[流量] 创建分表 %s 失败: %v", tableName, err)
+                        continue
+                }
 
-		// 批量插入
-		for _, item := range group {
-			sql := fmt.Sprintf(`INSERT INTO %s (api_key_id, user_id, model_id, provider_id, provider_api_key_id, input_bytes, output_bytes, start_time, end_time, duration, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, tableName)
-			if err := r.db.Exec(sql,
-				item.APIKeyID, item.UserID, item.ModelID, item.ProviderID, item.ProviderAPIKeyID,
-				item.InputBytes, item.OutputBytes,
-				item.StartTime, item.EndTime, item.Duration, item.Status,
-				item.EndTime,
-			).Error; err != nil {
-				log.Printf("[流量] 写入记录失败: %v", err)
-			}
-		}
-	}
+                // 批量插入
+                for _, item := range group {
+                        sql := fmt.Sprintf(`INSERT INTO %s (api_key_id, user_id, model_id, provider_id, provider_api_key_id, input_bytes, output_bytes, start_time, end_time, duration, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, tableName)
+                        if err := r.db.Exec(sql,
+                                item.APIKeyID, item.UserID, item.ModelID, item.ProviderID, item.ProviderAPIKeyID,
+                                item.InputBytes, item.OutputBytes,
+                                item.StartTime, item.EndTime, item.Duration, item.Status,
+                                item.EndTime,
+                        ).Error; err != nil {
+                                log.Printf("[流量] 写入记录失败: %v", err)
+                        }
+                }
+        }
 }
 
 // FilterParams 过滤参数
 type FilterParams struct {
-	ModelID    uint
-	ProviderID uint
-	UserID     uint // 3.4 修复：添加用户级过滤，支持按用户隔离数据
+        ModelID    uint
+        ProviderID uint
+        UserID     uint // 3.4 修复：添加用户级过滤，支持按用户隔离数据
 }
 
 // buildWhereClause 构建公共 WHERE 子句（参数化查询，防止SQL注入）
 func buildWhereClause(since time.Time, filter FilterParams) (string, []interface{}) {
-	where := "created_at >= ?"
-	args := []interface{}{since}
-	if filter.ModelID > 0 {
-		where += " AND model_id = ?"
-		args = append(args, filter.ModelID)
-	}
-	if filter.ProviderID > 0 {
-		where += " AND provider_id = ?"
-		args = append(args, filter.ProviderID)
-	}
-	// 3.4 修复：支持按用户ID过滤
-	if filter.UserID > 0 {
-		where += " AND user_id = ?"
-		args = append(args, filter.UserID)
-	}
-	return where, args
+        where := "created_at >= ?"
+        args := []interface{}{since}
+        if filter.ModelID > 0 {
+                where += " AND model_id = ?"
+                args = append(args, filter.ModelID)
+        }
+        if filter.ProviderID > 0 {
+                where += " AND provider_id = ?"
+                args = append(args, filter.ProviderID)
+        }
+        // 3.4 修复：支持按用户ID过滤
+        if filter.UserID > 0 {
+                where += " AND user_id = ?"
+                args = append(args, filter.UserID)
+        }
+        return where, args
 }
 
 // buildUserWhereClause 构建用户相关的 WHERE 子句（参数化查询，防止SQL注入）
 func buildUserWhereClause(userID uint, since time.Time) (string, []interface{}) {
-	return "user_id = ? AND	created_at >= ?", []interface{}{userID, since}
+        return "user_id = ? AND created_at >= ?", []interface{}{userID, since}
 }
 
 // GetDashboardStats 获取Dashboard统计数据
 func GetDashboardStats(db *gorm.DB, since time.Time, filter FilterParams) (DashboardStats, error) {
-	// 4.4 修复：使用智能分表选择，仅查询since时间范围内的分表
-	tables := getRelevantTables(db, since)
+        // 4.4 修复：使用智能分表选择，仅查询since时间范围内的分表
+        tables := getRelevantTables(db, since)
 
-	if len(tables) == 0 {
-		return DashboardStats{}, nil
-	}
+        if len(tables) == 0 {
+                return DashboardStats{}, nil
+        }
 
-	// 构建参数化查询
-	where, args := buildWhereClause(since, filter)
+        // 构建参数化查询
+        where, args := buildWhereClause(since, filter)
 
-	// 构建UNION ALL查询
-	countSQL := ""
-	allArgs := []interface{}{}
-	for i, table := range tables {
-		if i > 0 {
-			countSQL += " UNION ALL	"
-		}
-		countSQL += fmt.Sprintf("SELECT COUNT(*) as cnt, COALESCE(SUM(input_bytes),0) as ib, COALESCE(SUM(output_bytes),0) as ob, COALESCE(AVG(duration),0) as ad FROM %s WHERE %s", table, where)
-		allArgs = append(allArgs, args...)
-	}
+        // 构建UNION ALL查询
+        countSQL := ""
+        allArgs := []interface{}{}
+        for i, table := range tables {
+                if i > 0 {
+                        countSQL += " UNION ALL "
+                }
+                countSQL += fmt.Sprintf("SELECT COUNT(*) as cnt, COALESCE(SUM(input_bytes),0) as ib, COALESCE(SUM(output_bytes),0) as ob, COALESCE(AVG(duration),0) as ad FROM %s WHERE %s", table, where)
+                allArgs = append(allArgs, args...)
+        }
 
-	// 聚合所有表的结果
-	aggSQL := fmt.Sprintf("SELECT SUM(cnt) as total_calls, SUM(ib) as total_input, SUM(ob) as total_output, CASE WHEN SUM(cnt)>0 THEN SUM(cnt*ad)/SUM(cnt) ELSE 0 END as avg_dur FROM (%s) t", countSQL)
+        // 聚合所有表的结果
+        aggSQL := fmt.Sprintf("SELECT SUM(cnt) as total_calls, SUM(ib) as total_input, SUM(ob) as total_output, CASE WHEN SUM(cnt)>0 THEN SUM(cnt*ad)/SUM(cnt) ELSE 0 END as avg_dur FROM (%s) t", countSQL)
 
-	var result struct {
-		TotalCalls  int64
-		TotalInput  int64
-		TotalOutput int64
-		AvgDur      float64
-	}
+        var result struct {
+                TotalCalls  int64
+                TotalInput  int64
+                TotalOutput int64
+                AvgDur      float64
+        }
 
-	if err := db.Raw(aggSQL, allArgs...).Scan(&result).Error; err != nil {
-		return DashboardStats{}, err
-	}
+        if err := db.Raw(aggSQL, allArgs...).Scan(&result).Error; err != nil {
+                return DashboardStats{}, err
+        }
 
-	stats := DashboardStats{
-		TotalCalls:       result.TotalCalls,
-		TotalInputBytes:  result.TotalInput,
-		TotalOutputBytes: result.TotalOutput,
-		AvgDuration:      result.AvgDur,
-	}
+        stats := DashboardStats{
+                TotalCalls:       result.TotalCalls,
+                TotalInputBytes:  result.TotalInput,
+                TotalOutputBytes: result.TotalOutput,
+                AvgDuration:      result.AvgDur,
+        }
 
-	return stats, nil
+        return stats, nil
 }
 
 // GetModelRanking 获取模型使用排行
 func GetModelRanking(db *gorm.DB, since time.Time, limit int, filter FilterParams) ([]RankingItem, error) {
-	// 4.4 修复：使用智能分表选择，仅查询since时间范围内的分表
-	tables := getRelevantTables(db, since)
-	if len(tables) == 0 {
-		return nil, nil
-	}
+        // 4.4 修复：使用智能分表选择，仅查询since时间范围内的分表
+        tables := getRelevantTables(db, since)
+        if len(tables) == 0 {
+                return nil, nil
+        }
 
-	where, args := buildWhereClause(since, filter)
+        where, args := buildWhereClause(since, filter)
 
-	unionSQL := ""
-	allArgs := []interface{}{}
-	for i, table := range tables {
-		if i > 0 {
-			unionSQL += " UNION ALL	"
-		}
-		unionSQL += fmt.Sprintf("SELECT model_id, COUNT(*) as cnt, COALESCE(SUM(input_bytes),0) as ib, COALESCE(SUM(output_bytes),0) as ob FROM %s WHERE %s GROUP BY model_id", table, where)
-		allArgs = append(allArgs, args...)
-	}
+        unionSQL := ""
+        allArgs := []interface{}{}
+        for i, table := range tables {
+                if i > 0 {
+                        unionSQL += " UNION ALL "
+                }
+                unionSQL += fmt.Sprintf("SELECT model_id, COUNT(*) as cnt, COALESCE(SUM(input_bytes),0) as ib, COALESCE(SUM(output_bytes),0) as ob FROM %s WHERE %s GROUP BY model_id", table, where)
+                allArgs = append(allArgs, args...)
+        }
 
-	aggSQL := fmt.Sprintf(`
-		SELECT t.model_id as id, m.name, SUM(t.cnt) as count, SUM(t.ib) as input_bytes, SUM(t.ob) as output_bytes
-		FROM (%s) t
-		LEFT JOIN models m ON m.id = t.model_id
-		GROUP BY t.model_id, m.name
-		ORDER BY count DESC
-		LIMIT %d
-	`, unionSQL, limit)
+        aggSQL := fmt.Sprintf(`
+                SELECT t.model_id as id, m.name, SUM(t.cnt) as count, SUM(t.ib) as input_bytes, SUM(t.ob) as output_bytes
+                FROM (%s) t
+                LEFT JOIN models m ON m.id = t.model_id
+                GROUP BY t.model_id, m.name
+                ORDER BY count DESC
+                LIMIT %d
+        `, unionSQL, limit)
 
-	var items []RankingItem
-	if err := db.Raw(aggSQL, allArgs...).Scan(&items).Error; err != nil {
-		return nil, err
-	}
-	return items, nil
+        var items []RankingItem
+        if err := db.Raw(aggSQL, allArgs...).Scan(&items).Error; err != nil {
+                return nil, err
+        }
+        return items, nil
 }
 
 // GetProviderRanking 获取供应商使用排行
 func GetProviderRanking(db *gorm.DB, since time.Time, limit int, filter FilterParams) ([]RankingItem, error) {
-	// 4.4 修复：使用智能分表选择，仅查询since时间范围内的分表
-	tables := getRelevantTables(db, since)
-	if len(tables) == 0 {
-		return nil, nil
-	}
+        // 4.4 修复：使用智能分表选择，仅查询since时间范围内的分表
+        tables := getRelevantTables(db, since)
+        if len(tables) == 0 {
+                return nil, nil
+        }
 
-	where, args := buildWhereClause(since, filter)
+        where, args := buildWhereClause(since, filter)
 
-	unionSQL := ""
-	allArgs := []interface{}{}
-	for i, table := range tables {
-		if i > 0 {
-			unionSQL += " UNION ALL	"
-		}
-		unionSQL += fmt.Sprintf("SELECT provider_id, COUNT(*) as cnt, COALESCE(SUM(input_bytes),0) as ib, COALESCE(SUM(output_bytes),0) as ob FROM %s WHERE %s GROUP BY provider_id", table, where)
-		allArgs = append(allArgs, args...)
-	}
+        unionSQL := ""
+        allArgs := []interface{}{}
+        for i, table := range tables {
+                if i > 0 {
+                        unionSQL += " UNION ALL "
+                }
+                unionSQL += fmt.Sprintf("SELECT provider_id, COUNT(*) as cnt, COALESCE(SUM(input_bytes),0) as ib, COALESCE(SUM(output_bytes),0) as ob FROM %s WHERE %s GROUP BY provider_id", table, where)
+                allArgs = append(allArgs, args...)
+        }
 
-	aggSQL := fmt.Sprintf(`
-		SELECT t.provider_id as id, p.name, SUM(t.cnt) as count, SUM(t.ib) as input_bytes, SUM(t.ob) as output_bytes
-		FROM (%s) t
-		LEFT JOIN providers p ON p.id = t.provider_id
-		GROUP BY t.provider_id, p.name
-		ORDER BY count DESC
-		LIMIT %d
-	`, unionSQL, limit)
+        aggSQL := fmt.Sprintf(`
+                SELECT t.provider_id as id, p.name, SUM(t.cnt) as count, SUM(t.ib) as input_bytes, SUM(t.ob) as output_bytes
+                FROM (%s) t
+                LEFT JOIN providers p ON p.id = t.provider_id
+                GROUP BY t.provider_id, p.name
+                ORDER BY count DESC
+                LIMIT %d
+        `, unionSQL, limit)
 
-	var items []RankingItem
-	if err := db.Raw(aggSQL, allArgs...).Scan(&items).Error; err != nil {
-		return nil, err
-	}
-	return items, nil
+        var items []RankingItem
+        if err := db.Raw(aggSQL, allArgs...).Scan(&items).Error; err != nil {
+                return nil, err
+        }
+        return items, nil
+}
+
+// GetUserRanking 获取用户使用排行（管理员视图：按用户聚合调用量）
+func GetUserRanking(db *gorm.DB, since time.Time, limit int, filter FilterParams) ([]RankingItem, error) {
+        tables := getRelevantTables(db, since)
+        if len(tables) == 0 {
+                return nil, nil
+        }
+
+        where, args := buildWhereClause(since, filter)
+
+        unionSQL := ""
+        allArgs := []interface{}{}
+        for i, table := range tables {
+                if i > 0 {
+                        unionSQL += " UNION ALL "
+                }
+                unionSQL += fmt.Sprintf("SELECT user_id, COUNT(*) as cnt, COALESCE(SUM(input_bytes),0) as ib, COALESCE(SUM(output_bytes),0) as ob FROM %s WHERE %s GROUP BY user_id", table, where)
+                allArgs = append(allArgs, args...)
+        }
+
+        aggSQL := fmt.Sprintf(`
+                SELECT t.user_id as id, COALESCE(u.display_name, u.username) as name, SUM(t.cnt) as count, SUM(t.ib) as input_bytes, SUM(t.ob) as output_bytes
+                FROM (%s) t
+                LEFT JOIN users u ON u.id = t.user_id
+                GROUP BY t.user_id, u.display_name, u.username
+                ORDER BY count DESC
+                LIMIT %d
+        `, unionSQL, limit)
+
+        var items []RankingItem
+        if err := db.Raw(aggSQL, allArgs...).Scan(&items).Error; err != nil {
+                return nil, err
+        }
+        return items, nil
 }
 
 // GetUserStats 获取用户的使用统计
 func GetUserStats(db *gorm.DB, userID uint, since time.Time) (DashboardStats, error) {
-	// 4.4 修复：使用智能分表选择，仅查询since时间范围内的分表
-	tables := getRelevantTables(db, since)
-	if len(tables) == 0 {
-		return DashboardStats{}, nil
-	}
+        // 4.4 修复：使用智能分表选择，仅查询since时间范围内的分表
+        tables := getRelevantTables(db, since)
+        if len(tables) == 0 {
+                return DashboardStats{}, nil
+        }
 
-	where, args := buildUserWhereClause(userID, since)
+        where, args := buildUserWhereClause(userID, since)
 
-	countSQL := ""
-	allArgs := []interface{}{}
-	for i, table := range tables {
-		if i > 0 {
-			countSQL += " UNION ALL	"
-		}
-		countSQL += fmt.Sprintf("SELECT COUNT(*) as cnt, COALESCE(SUM(input_bytes),0) as ib, COALESCE(SUM(output_bytes),0) as ob, COALESCE(AVG(duration),0) as ad FROM %s WHERE %s", table, where)
-		allArgs = append(allArgs, args...)
-	}
+        countSQL := ""
+        allArgs := []interface{}{}
+        for i, table := range tables {
+                if i > 0 {
+                        countSQL += " UNION ALL "
+                }
+                countSQL += fmt.Sprintf("SELECT COUNT(*) as cnt, COALESCE(SUM(input_bytes),0) as ib, COALESCE(SUM(output_bytes),0) as ob, COALESCE(AVG(duration),0) as ad FROM %s WHERE %s", table, where)
+                allArgs = append(allArgs, args...)
+        }
 
-	aggSQL := fmt.Sprintf("SELECT SUM(cnt) as total_calls, SUM(ib) as total_input, SUM(ob) as total_output, CASE WHEN SUM(cnt)>0 THEN SUM(cnt*ad)/SUM(cnt) ELSE 0 END as avg_dur FROM (%s) t", countSQL)
+        aggSQL := fmt.Sprintf("SELECT SUM(cnt) as total_calls, SUM(ib) as total_input, SUM(ob) as total_output, CASE WHEN SUM(cnt)>0 THEN SUM(cnt*ad)/SUM(cnt) ELSE 0 END as avg_dur FROM (%s) t", countSQL)
 
-	var result struct {
-		TotalCalls  int64
-		TotalInput  int64
-		TotalOutput int64
-		AvgDur      float64
-	}
+        var result struct {
+                TotalCalls  int64
+                TotalInput  int64
+                TotalOutput int64
+                AvgDur      float64
+        }
 
-	if err := db.Raw(aggSQL, allArgs...).Scan(&result).Error; err != nil {
-		return DashboardStats{}, err
-	}
+        if err := db.Raw(aggSQL, allArgs...).Scan(&result).Error; err != nil {
+                return DashboardStats{}, err
+        }
 
-	return DashboardStats{
-		TotalCalls:       result.TotalCalls,
-		TotalInputBytes:  result.TotalInput,
-		TotalOutputBytes: result.TotalOutput,
-		AvgDuration:      result.AvgDur,
-	}, nil
+        return DashboardStats{
+                TotalCalls:       result.TotalCalls,
+                TotalInputBytes:  result.TotalInput,
+                TotalOutputBytes: result.TotalOutput,
+                AvgDuration:      result.AvgDur,
+        }, nil
 }
 
 // GetUserTrafficRecords 获取用户的使用记录
 func GetUserTrafficRecords(db *gorm.DB, userID uint, since time.Time, page, pageSize int) ([]map[string]interface{}, int64, error) {
-	// 4.4 修复：使用智能分表选择，仅查询since时间范围内的分表
-	tables := getRelevantTables(db, since)
-	if len(tables) == 0 {
-		return nil, 0, nil
-	}
+        // 4.4 修复：使用智能分表选择，仅查询since时间范围内的分表
+        tables := getRelevantTables(db, since)
+        if len(tables) == 0 {
+                return nil, 0, nil
+        }
 
-	where, args := buildUserWhereClause(userID, since)
+        where, args := buildUserWhereClause(userID, since)
 
-	// 先统计总数
-	countSQL := ""
-	allArgs := []interface{}{}
-	for i, table := range tables {
-		if i > 0 {
-			countSQL += " UNION ALL	"
-		}
-		countSQL += fmt.Sprintf("SELECT * FROM %s WHERE %s", table, where)
-		allArgs = append(allArgs, args...)
-	}
+        // 先统计总数
+        countSQL := ""
+        allArgs := []interface{}{}
+        for i, table := range tables {
+                if i > 0 {
+                        countSQL += " UNION ALL "
+                }
+                countSQL += fmt.Sprintf("SELECT * FROM %s WHERE %s", table, where)
+                allArgs = append(allArgs, args...)
+        }
 
-	var total int64
-	db.Raw(fmt.Sprintf("SELECT COUNT(*) FROM (%s) t", countSQL), allArgs...).Scan(&total)
+        var total int64
+        db.Raw(fmt.Sprintf("SELECT COUNT(*) FROM (%s) t", countSQL), allArgs...).Scan(&total)
 
-	// 查询记录
-	offset := (page - 1) * pageSize
-	querySQL := fmt.Sprintf(`
-		SELECT t.*, m.name as model_name, p.name as provider_name
-		FROM (%s) t
-		LEFT JOIN models m ON m.id = t.model_id
-		LEFT JOIN providers p ON p.id = t.provider_id
-		ORDER BY t.created_at DESC
-		LIMIT %d OFFSET %d
-	`, countSQL, pageSize, offset)
+        // 查询记录
+        offset := (page - 1) * pageSize
+        querySQL := fmt.Sprintf(`
+                SELECT t.*, m.name as model_name, p.name as provider_name
+                FROM (%s) t
+                LEFT JOIN models m ON m.id = t.model_id
+                LEFT JOIN providers p ON p.id = t.provider_id
+                ORDER BY t.created_at DESC
+                LIMIT %d OFFSET %d
+        `, countSQL, pageSize, offset)
 
-	var records []map[string]interface{}
-	if err := db.Raw(querySQL, allArgs...).Scan(&records).Error; err != nil {
-		return nil, 0, err
-	}
+        var records []map[string]interface{}
+        if err := db.Raw(querySQL, allArgs...).Scan(&records).Error; err != nil {
+                return nil, 0, err
+        }
 
-	return records, total, nil
+        return records, total, nil
 }
