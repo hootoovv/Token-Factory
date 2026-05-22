@@ -47,8 +47,11 @@ RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
 # -------------------- 阶段3: 运行镜像 --------------------
 FROM alpine:3.19
 
-# 安装运行时依赖（ca-certificates 用于 HTTPS 请求，tzdata 用于时区支持）
-RUN apk add --no-cache ca-certificates tzdata \
+# 安装运行时依赖
+# ca-certificates: HTTPS 请求
+# tzdata: 时区支持
+# su-exec: 以 root 修复权限后切换到非 root 用户
+RUN apk add --no-cache ca-certificates tzdata su-exec \
     && cp /usr/share/zoneinfo/Asia/Shanghai /etc/localtime \
     && echo "Asia/Shanghai" > /etc/timezone \
     && apk del tzdata
@@ -67,11 +70,14 @@ COPY --from=backend-builder /token-factory ./
 # 复制默认配置文件
 COPY config.yaml ./
 
+# 复制入口脚本（以 root 启动，修复挂载卷权限后切换到 appuser）
+COPY entrypoint.sh ./
+RUN chmod +x ./entrypoint.sh
+
 # 确保数据目录权限
 RUN chown -R appuser:appgroup /app
 
-# 切换到非 root 用户
-USER appuser
+# 注意：不在此处切换 USER，由 entrypoint.sh 在修复权限后切换
 
 # 暴露端口
 # 11444: API 代理服务端口
@@ -85,6 +91,6 @@ VOLUME ["/app/data"]
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
     CMD wget -qO- http://localhost:8080/ || exit 1
 
-# 启动服务
-ENTRYPOINT ["./token-factory"]
+# 启动服务（通过 entrypoint.sh 修复权限后以 appuser 身份运行）
+ENTRYPOINT ["./entrypoint.sh"]
 CMD ["config.yaml"]

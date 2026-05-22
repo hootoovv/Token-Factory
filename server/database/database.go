@@ -250,6 +250,17 @@ func InitDB(cfg *config.DatabaseConfig) (*gorm.DB, error) {
                                 return nil, fmt.Errorf("创建数据库目录失败: %w", err)
                         }
                 }
+
+                // 检查数据目录是否可写（提前发现权限问题，避免 SQLite 返回误导性 "out of memory" 错误）
+                checkDir := dir
+                if checkDir == "" || checkDir == "." {
+                        checkDir = "."
+                }
+                if err := os.WriteFile(filepath.Join(checkDir, ".db_write_check"), []byte("check"), 0644); err != nil {
+                        return nil, fmt.Errorf("数据库目录 %q 不可写 (权限不足)，请检查目录权限或 Docker 挂载卷权限: %w", checkDir, err)
+                }
+                os.Remove(filepath.Join(checkDir, ".db_write_check")) // 清理临时文件
+
                 db, err = gorm.Open(sqlite.Open(cfg.DSN+"?_journal_mode=WAL"), gormConfig)
         case "mysql":
                 db, err = gorm.Open(mysql.Open(cfg.DSN), gormConfig)
