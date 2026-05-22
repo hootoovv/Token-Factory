@@ -216,9 +216,14 @@ func DecryptAPIKey(ciphertext, encryptionKey string) (string, error) {
         return string(plaintext), nil
 }
 
-// hasEncryptedPrefix 检查字符串是否以加密前缀开头
-func hasEncryptedPrefix(s string) bool {
+// HasEncryptedPrefix 检查字符串是否以加密前缀开头（导出供其他包使用）
+func HasEncryptedPrefix(s string) bool {
         return len(s) > len(EncryptedPrefix) && s[:len(EncryptedPrefix)] == EncryptedPrefix
+}
+
+// hasEncryptedPrefix 检查字符串是否以加密前缀开头（内部使用，保持向后兼容）
+func hasEncryptedPrefix(s string) bool {
+        return HasEncryptedPrefix(s)
 }
 
 // GenerateEncryptionKey 生成一个新的32字节AES-256加密密钥（base64编码）
@@ -355,9 +360,19 @@ func MigrateProviderAPIKeys(db *gorm.DB, encryptionKey string) error {
                 }
 
                 // 创建 ProviderAPIKey 记录
+                apiKeyToStore := p.APIKey
+                // 如果旧字段中的 API Key 是明文（没有加密前缀），则在迁移时加密
+                if !HasEncryptedPrefix(p.APIKey) && encryptionKey != "" {
+                        encrypted, encErr := EncryptAPIKey(p.APIKey, encryptionKey)
+                        if encErr != nil {
+                                log.Printf("[迁移] 加密供应商 %s (ID=%d) 的 API Key 失败: %v，将以明文迁移", p.Name, p.ID, encErr)
+                        } else {
+                                apiKeyToStore = encrypted
+                        }
+                }
                 providerAPIKey := ProviderAPIKey{
                         ProviderID: p.ID,
-                        APIKey:     p.APIKey, // 已是加密格式，直接搬迁
+                        APIKey:     apiKeyToStore,
                         Name:       "默认Key",
                         Status:     p.Status,
                 }

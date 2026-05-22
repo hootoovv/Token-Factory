@@ -1559,7 +1559,7 @@ func (s *Server) handleCreateProviderAPIKey(c *gin.Context) {
         encryptedKey, err := database.EncryptAPIKey(req.APIKey, s.encryptionKey)
         if err != nil {
                 log.Printf("[管理] 加密供应商API Key失败: %v", err)
-                c.JSON(500, gin.H{"error": "加密API Key失败，请稍后重试"})
+                c.JSON(500, gin.H{"error": "加密API Key失败: " + err.Error() + "，请检查 encryption_key 配置"})
                 return
         }
 
@@ -1626,7 +1626,7 @@ func (s *Server) handleUpdateProviderAPIKey(c *gin.Context) {
                 encryptedKey, err := database.EncryptAPIKey(*req.APIKey, s.encryptionKey)
                 if err != nil {
                         log.Printf("[管理] 加密供应商API Key失败: %v", err)
-                        c.JSON(500, gin.H{"error": "加密API Key失败，请稍后重试"})
+                        c.JSON(500, gin.H{"error": "加密API Key失败: " + err.Error() + "，请检查 encryption_key 配置"})
                         return
                 }
                 updates["api_key"] = encryptedKey

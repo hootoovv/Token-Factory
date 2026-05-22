@@ -86,6 +86,17 @@ func main() {
                 log.Fatalf("[安全] 错误: 未设置 ENCRYPTION_KEY 环境变量或配置文件encryption_key，供应商API Key加密为强制要求")
         }
 
+        // 6.1 校验加密密钥格式（必须是有效的 base64 编码且解码后为 32 字节，即 AES-256 密钥）
+        // 启动时校验，避免运行时添加供应商 API Key 才报错，用户无从排查
+        keyBytes, err := base64.StdEncoding.DecodeString(encryptionKey)
+        if err != nil {
+                log.Fatalf("[安全] 错误: encryption_key 不是有效的 base64 编码: %v。生成方式: openssl rand -base64 32", err)
+        }
+        if len(keyBytes) != 32 {
+                log.Fatalf("[安全] 错误: encryption_key 解码后长度为 %d 字节，必须为 32 字节(AES-256)，当前为 %d 字节。生成方式: openssl rand -base64 32", len(keyBytes), len(keyBytes))
+        }
+        log.Printf("[安全] 加密密钥格式校验通过 (AES-256, 32字节)")
+
         // 7. 初始化内存缓存（传入加密密钥用于自动解密，传入自动状态管理配置）
         cacheObj := cache.NewCache(db, encryptionKey, cfg.Proxy.AutoStatus)
         log.Printf("[缓存] 数据加载完成")
