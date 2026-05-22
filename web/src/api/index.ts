@@ -134,6 +134,18 @@ export const myDashboardApi = {
     if (userId) params.user_id = String(userId);
     return api.get("/my/dashboard/provider-ranking", { params });
   },
+  userRanking: (
+    timeFilter: string,
+    modelId?: number | null,
+    providerId?: number | null,
+    userId?: number | null,
+  ) => {
+    const params: Record<string, string> = { time_filter: timeFilter };
+    if (modelId) params.model_id = String(modelId);
+    if (providerId) params.provider_id = String(providerId);
+    if (userId) params.user_id = String(userId);
+    return api.get("/my/dashboard/user-ranking", { params });
+  },
   users: () => api.get("/my/dashboard/users"), // 管理员获取用户列表用于过滤
   models: () => api.get("/dashboard/models"),
   providers: () => api.get("/dashboard/providers"),

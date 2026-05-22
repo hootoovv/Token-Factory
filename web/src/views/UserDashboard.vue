@@ -108,9 +108,9 @@
       </el-col>
     </el-row>
 
-    <!-- 排行 -->
-    <el-row :gutter="20" class="charts-row">
-      <el-col :span="12">
+    <!-- 排行（3列：模型 / 用户 / 供应商） -->
+    <el-row :gutter="16" class="charts-row">
+      <el-col :span="8">
         <el-card shadow="hover">
           <template #header>
             <div class="card-header">
@@ -126,7 +126,7 @@
               </div>
               <div class="ranking-right">
                 <el-progress :percentage="getPercentage(item.count, modelRanking)" :stroke-width="8" :show-text="false"
-                  style="width: 120px;" />
+                  style="width: 100px;" />
                 <span class="ranking-count">{{ formatNumber(item.count) }}</span>
               </div>
             </div>
@@ -134,7 +134,31 @@
           </div>
         </el-card>
       </el-col>
-      <el-col :span="12">
+      <el-col :span="8">
+        <el-card shadow="hover">
+          <template #header>
+            <div class="card-header">
+              <span>用户使用排行</span>
+              <el-tag size="small" type="info">TOP 10</el-tag>
+            </div>
+          </template>
+          <div class="ranking-list">
+            <div v-for="(item, idx) in userRanking" :key="item.id" class="ranking-item">
+              <div class="ranking-left">
+                <span class="ranking-index" :class="idx < 3 ? 'top3' : ''">{{ idx + 1 }}</span>
+                <span class="ranking-name">{{ item.name }}</span>
+              </div>
+              <div class="ranking-right">
+                <el-progress :percentage="getPercentage(item.count, userRanking)" :stroke-width="8"
+                  :show-text="false" style="width: 100px;" color="#e6a23c" />
+                <span class="ranking-count">{{ formatNumber(item.count) }}</span>
+              </div>
+            </div>
+            <el-empty v-if="userRanking.length === 0" description="暂无数据" :image-size="60" />
+          </div>
+        </el-card>
+      </el-col>
+      <el-col :span="8">
         <el-card shadow="hover">
           <template #header>
             <div class="card-header">
@@ -150,7 +174,7 @@
               </div>
               <div class="ranking-right">
                 <el-progress :percentage="getPercentage(item.count, providerRanking)" :stroke-width="8"
-                  :show-text="false" style="width: 120px;" color="#409eff" />
+                  :show-text="false" style="width: 100px;" color="#409eff" />
                 <span class="ranking-count">{{ formatNumber(item.count) }}</span>
               </div>
             </div>
@@ -189,6 +213,7 @@ const stats = ref({
 })
 
 const modelRanking = ref<any[]>([])
+const userRanking = ref<any[]>([])
 const providerRanking = ref<any[]>([])
 
 // 获取模型/供应商列表（用于过滤下拉框）
@@ -255,9 +280,19 @@ async function fetchProviderRanking() {
   }
 }
 
+async function fetchUserRanking() {
+  try {
+    const res = await myDashboardApi.userRanking(timeFilter.value, modelFilter.value, providerFilter.value, userFilter.value)
+    userRanking.value = res.data || []
+  } catch (e) {
+    console.error(e)
+  }
+}
+
 function fetchAllData() {
   fetchStats()
   fetchModelRanking()
+  fetchUserRanking()
   fetchProviderRanking()
 }
 

@@ -231,6 +231,7 @@ func (s *Server) Start(addr string) error {
                         auth.GET("/my/dashboard/stats", s.handleMyDashboardStats)
                         auth.GET("/my/dashboard/model-ranking", s.handleMyModelRanking)
                         auth.GET("/my/dashboard/provider-ranking", s.handleMyProviderRanking)
+                        auth.GET("/my/dashboard/user-ranking", s.handleMyUserRanking)  // 用户使用排行（管理员查全部，普通用户仅自己）
                         auth.GET("/my/dashboard/users", s.handleMyDashboardUsers) // 管理员专用：获取用户列表用于过滤
 
                         // 普通用户接口
@@ -623,6 +624,37 @@ func (s *Server) handleMyProviderRanking(c *gin.Context) {
         if err != nil {
                 log.Printf("[管理] 获取用户供应商排行失败: %v", err)
                 c.JSON(500, gin.H{"error": "获取供应商排行失败"})
+                return
+        }
+        c.JSON(200, ranking)
+}
+
+// handleMyUserRanking 认证用户的用户使用排行
+// 管理员：查看所有用户的排行；普通用户：仅查看自己的数据（单条记录）
+func (s *Server) handleMyUserRanking(c *gin.Context) {
+        userID := c.GetUint("userID")
+        role := c.GetString("role")
+        since := s.parseSince(c)
+        filter := s.parseDashboardFilter(c)
+
+        if role == "admin" {
+                // 管理员：支持按user_id过滤，不传则显示所有用户排行
+                if uid := c.Query("user_id"); uid != "" {
+                        var filterUserID uint
+                        fmt.Sscanf(uid, "%d", &filterUserID)
+                        if filterUserID > 0 {
+                                filter.UserID = filterUserID
+                        }
+                }
+        } else {
+                // 普通用户：强制只显示自己的数据
+                filter.UserID = userID
+        }
+
+        ranking, err := traffic.GetUserRanking(s.db, since, 10, filter)
+        if err != nil {
+                log.Printf("[管理] 获取用户排行失败: %v", err)
+                c.JSON(500, gin.H{"error": "获取用户排行失败"})
                 return
         }
         c.JSON(200, ranking)
