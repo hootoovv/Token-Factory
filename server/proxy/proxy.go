@@ -396,6 +396,38 @@ func streamingCopy(dst http.ResponseWriter, src io.ReadCloser, firstByte byte, i
         }
 }
 
+// bufferedCopy 非流式响应的完整体拷贝
+// 一次性读取上游完整响应体，然后写入客户端
+// 适用于非流式请求（stream 未设置或 stream:false），避免 streamingCopy 的以下问题：
+//   1. 流Idle超时（默认15秒）可能在非流式响应的TCP段间触发，导致响应被截断
+//   2. 逐块flush与上游Content-Length头冲突，导致客户端解析失败
+//   3. 对非流式响应做逐字节flush没有意义（客户端需要完整JSON才能解析）
+func bufferedCopy(dst http.ResponseWriter, src io.ReadCloser, totalCtx context.Context, providerName string) (int64, error) {
+        // 带超时的完整读取
+        type readResult struct {
+                data []byte
+                err  error
+        }
+
+        resultCh := make(chan readResult, 1)
+        go func() {
+                // LimitReader 防止异常大响应导致OOM（上限50MB，与请求体限制一致）
+                data, err := io.ReadAll(io.LimitReader(src, MaxRequestBodySize))
+                resultCh <- readResult{data, err}
+        }()
+
+        select {
+        case result := <-resultCh:
+                if result.err != nil {
+                        return 0, fmt.Errorf("读取响应体失败: %w", result.err)
+                }
+                n, err := dst.Write(result.data)
+                return int64(n), err
+        case <-totalCtx.Done():
+                return 0, fmt.Errorf("总超时到期: %w", totalCtx.Err())
+        }
+}
+
 // ==================== 错误状态分类 ====================
 
 // classifyErrorStatus 根据上游供应商的HTTP状态码和响应体内容，判断应该将 API Key 设置为什么状态
@@ -728,53 +760,100 @@ func (s *Server) handleProxy(w http.ResponseWriter, r *http.Request) {
                 // log.Printf("[DEBUG] [%s] 首Token已接收(0x%02x), 等待耗时:%v", provider.ProviderName, firstByte, ftDuration)
 
                 // 连接成功 + 首Token已收到，不可再重试，退出循环
-                // 从此开始进入流式传输阶段
+                // 从此开始进入响应传输阶段
                 connectDuration := time.Since(startTime)
-                log.Printf("[代理] 供应商 %s (模型: %s) 连接成功，首 Token 已接收 (首字节:0x%02x, HTTP状态:%d, 连接耗时:%v, 超时配置:总=%v/流Idle=%v)",
-                        provider.ProviderName, provider.ProviderModelName, firstByte, resp.StatusCode, connectDuration, timeouts.Total, timeouts.StreamIdle)
 
                 // ===== 请求成功，重置连续失败计数 =====
                 s.cache.ResetAPIKeyFailure(provider.ProviderAPIKeyID)
 
-                // ---- 阶段B：流式传输（不可重试阶段） ----
-                // 复制响应头
-                headerCount := 0
-                for key, values := range resp.Header {
-                        for _, value := range values {
-                                w.Header().Add(key, value)
-                                headerCount++
+                // ---- 阶段B：响应传输（不可重试阶段） ----
+                isStream := isStreamRequest(bodyBytes)
+
+                if isStream {
+                        // ---- 流式请求：使用 streamingCopy（逐块flush + 流Idle超时） ----
+                        log.Printf("[代理] 供应商 %s (模型: %s) 连接成功，首 Token 已接收 (首字节:0x%02x, HTTP状态:%d, 连接耗时:%v, 模式:流式, 超时:总=%v/流Idle=%v)",
+                                provider.ProviderName, provider.ProviderModelName, firstByte, resp.StatusCode, connectDuration, timeouts.Total, timeouts.StreamIdle)
+
+                        // 复制响应头
+                        for key, values := range resp.Header {
+                                for _, value := range values {
+                                        w.Header().Add(key, value)
+                                }
                         }
-                }
-                // log.Printf("[DEBUG] [%s] 已复制%d个响应头, Content-Type=%s, Transfer-Encoding=%s",
-                //                               provider.ProviderName, headerCount,
-                //                               resp.Header.Get("Content-Type"), resp.Header.Get("Transfer-Encoding"))
+                        w.WriteHeader(resp.StatusCode)
 
-                // 写入响应状态码
-                w.WriteHeader(resp.StatusCode)
-                // log.Printf("[DEBUG] [%s] 已写入响应状态码 %d, 开始streamingCopy...", provider.ProviderName, resp.StatusCode)
+                        // streamingCopy 在流式传输中监控 idle 超时和总超时
+                        outputBytes, streamCopyErr = streamingCopy(w, resp.Body, firstByte, timeouts.StreamIdle, totalCtx, provider.ProviderName)
+                        totalCancel()
+                        s.cache.UnregisterActiveRequest(provider.ProviderAPIKeyID, activeRequestID)
 
-                // ---- 阶段3+4：流传输Idle超时 + 总超时 ----
-                // streamingCopy 在流式传输中监控 idle 超时和总超时
-                outputBytes, streamCopyErr = streamingCopy(w, resp.Body, firstByte, timeouts.StreamIdle, totalCtx, provider.ProviderName)
-                totalCancel()
-                s.cache.UnregisterActiveRequest(provider.ProviderAPIKeyID, activeRequestID)
+                        streamDuration := time.Since(startTime)
+                        if streamCopyErr != nil {
+                                log.Printf("[代理] 流传输异常: %v (供应商: %s, 已写入: %d 字节, 总耗时: %v)",
+                                        streamCopyErr, provider.ProviderName, outputBytes, streamDuration)
+                        } else {
+                                log.Printf("[代理] 流传输完成 (供应商: %s, 已写入: %d 字节, 总耗时: %v)",
+                                        provider.ProviderName, outputBytes, streamDuration)
+                        }
 
-                streamDuration := time.Since(startTime)
-                if streamCopyErr != nil {
-                        log.Printf("[代理] 流传输异常: %v (供应商: %s, 已写入: %d 字节, 总耗时: %v)",
-                                streamCopyErr, provider.ProviderName, outputBytes, streamDuration)
-                        // 流传输阶段无法重试（响应头已发送），记录错误但继续后续流程
+                        if streamCopyErr != nil {
+                                proxyStatus = "error"
+                        } else {
+                                proxyStatus = "success"
+                        }
                 } else {
-                        log.Printf("[代理] 流传输完成 (供应商: %s, 已写入: %d 字节, 总耗时: %v)",
-                                provider.ProviderName, outputBytes, streamDuration)
-                }
+                        // ---- 非流式请求：使用 bufferedCopy（一次性完整读取+写入） ----
+                        // 非流式请求不走 streamingCopy，避免：
+                        //   1. 流Idle超时截断完整响应（Ollama等后端生成完毕后才一次性返回JSON）
+                        //   2. 逐块flush与上游Content-Length冲突导致客户端解析失败
+                        //   3. 不必要的首字节拆分（readFirstByteWithTimeout消费1字节后再拼接）
+                        log.Printf("[代理] 供应商 %s (模型: %s) 连接成功 (HTTP状态:%d, 连接耗时:%v, 模式:非流式, 超时:总=%v)",
+                                provider.ProviderName, provider.ProviderModelName, resp.StatusCode, connectDuration, timeouts.Total)
 
-                // 判断最终状态（到达此阶段说明HTTP状态码 < 400，已由阶段1.5过滤）
-                if streamCopyErr != nil {
-                        // HTTP 状态码正常但流传输有错误（如 idle 超时），标记为 error
-                        proxyStatus = "error"
-                } else {
-                        proxyStatus = "success"
+                        // 非流式响应：读取完整响应体，然后一次性写入
+                        // 不复制上游的 Transfer-Encoding/Content-Length 头，让Go自动根据实际写入量设置
+                        for key, values := range resp.Header {
+                                for _, value := range values {
+                                        lowerKey := strings.ToLower(key)
+                                        // 跳过 hop-by-hop 头和传输编码头，避免与Go的ResponseWriter冲突
+                                        if lowerKey == "transfer-encoding" || lowerKey == "content-length" {
+                                                continue
+                                        }
+                                        w.Header().Add(key, value)
+                                }
+                        }
+                        // 将已读取的首字节放回，组成完整响应体
+                        // readFirstByteWithTimeout 已消费1字节，需要将它与剩余体拼接
+                        w.WriteHeader(resp.StatusCode)
+
+                        // 先写入已读取的首字节
+                        n, writeErr := w.Write([]byte{firstByte})
+                        outputBytes = int64(n)
+                        if writeErr != nil {
+                                streamCopyErr = fmt.Errorf("写入首字节失败: %w", writeErr)
+                                totalCancel()
+                                s.cache.UnregisterActiveRequest(provider.ProviderAPIKeyID, activeRequestID)
+                                proxyStatus = "error"
+                                break
+                        }
+
+                        // 读取并写入剩余响应体（带总超时，无流Idle超时）
+                        remainingBytes, remainingErr := bufferedCopy(w, resp.Body, totalCtx, provider.ProviderName)
+                        outputBytes += remainingBytes
+                        totalCancel()
+                        s.cache.UnregisterActiveRequest(provider.ProviderAPIKeyID, activeRequestID)
+
+                        streamDuration := time.Since(startTime)
+                        if remainingErr != nil {
+                                streamCopyErr = remainingErr
+                                log.Printf("[代理] 非流式响应传输异常: %v (供应商: %s, 已写入: %d 字节, 总耗时: %v)",
+                                        remainingErr, provider.ProviderName, outputBytes, streamDuration)
+                                proxyStatus = "error"
+                        } else {
+                                log.Printf("[代理] 非流式响应传输完成 (供应商: %s, 已写入: %d 字节, 总耗时: %v)",
+                                        provider.ProviderName, outputBytes, streamDuration)
+                                proxyStatus = "success"
+                        }
                 }
 
                 break
