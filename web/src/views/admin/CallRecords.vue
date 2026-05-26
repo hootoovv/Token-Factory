@@ -163,13 +163,14 @@ function formatJson(str: string): string {
   if (!str) return ''
   try {
     const parsed = JSON.parse(str)
-    return JSON.stringify(parsed, null, 2)
+    // 将JSON字符串值中的转义换行符 \n 替换为实际换行，提升可读性
+    return JSON.stringify(parsed, null, 2).replace(/\\n/g, '\n')
   } catch {
     // 可能是SSE流式输出的原始数据（聚合失败时的回退）
     if (str.includes('data: ')) {
       return formatSSE(str)
     }
-    return str
+    return str.replace(/\\n/g, '\n')
   }
 }
 
