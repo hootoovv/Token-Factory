@@ -15,6 +15,7 @@ import (
         "time"
 
         "token_factory/cache"
+        "token_factory/callrecords"
         "token_factory/config"
         "token_factory/traffic"
 
@@ -112,6 +113,7 @@ var proxyClient = &http.Client{
 type Server struct {
         cache           *cache.Cache
         recorder        *traffic.Recorder
+        callRecords     *callrecords.Store        // API调用记录存储（内存环形缓冲）
         server          *http.Server
         strategy        string                    // sequential / round-robin / random
         affinity        bool                      // 会话亲和性
@@ -119,7 +121,7 @@ type Server struct {
 }
 
 // NewServer 创建代理服务器
-func NewServer(c *cache.Cache, r *traffic.Recorder, proxyCfg *config.ProxyConfig) *Server {
+func NewServer(c *cache.Cache, r *traffic.Recorder, cr *callrecords.Store, proxyCfg *config.ProxyConfig) *Server {
         strategy := "round-robin"
         affinity := true
         defaultTimeouts := config.ProxyTimeoutConfig{
@@ -140,6 +142,7 @@ func NewServer(c *cache.Cache, r *traffic.Recorder, proxyCfg *config.ProxyConfig
         return &Server{
                 cache:           c,
                 recorder:        r,
+                callRecords:     cr,
                 strategy:        strategy,
                 affinity:        affinity,
                 defaultTimeouts: defaultTimeouts,
@@ -879,6 +882,25 @@ func (s *Server) handleProxy(w http.ResponseWriter, r *http.Request) {
                         Duration:         endTime.Sub(startTime).Milliseconds(),
                         Status:           "error",
                 })
+
+                // 记录API调用（失败）
+                if s.callRecords != nil {
+                        s.callRecords.Add(callrecords.CallRecord{
+                                Time:           startTime,
+                                Caller:         keyInfo.UserName,
+                                ModelName:      modelName,
+                                InputDataSize:  inputBytes,
+                                OutputDataSize: 0,
+                                TotalDuration:  endTime.Sub(startTime).Milliseconds(),
+                                Status:         "error",
+                                InputParams:    truncateString(string(bodyBytes), 4096),
+                                OutputParams:   truncateString(errMsg, 4096),
+                                ProviderName:   usedProvider.ProviderName,
+                                ProviderModel:  usedProvider.ProviderModelName,
+                                IsStream:       isStreamRequest(bodyBytes),
+                        })
+                }
+
                 http.Error(w, fmt.Sprintf(`{"error":{"message":"%s","type":"server_error"}}`, errMsg), http.StatusBadGateway)
                 return
         }
@@ -904,6 +926,24 @@ func (s *Server) handleProxy(w http.ResponseWriter, r *http.Request) {
                 Duration:         endTime.Sub(startTime).Milliseconds(),
                 Status:           proxyStatus,
         })
+
+        // 记录API调用（成功或部分成功）
+        if s.callRecords != nil {
+                s.callRecords.Add(callrecords.CallRecord{
+                        Time:           startTime,
+                        Caller:         keyInfo.UserName,
+                        ModelName:      modelName,
+                        InputDataSize:  inputBytes,
+                        OutputDataSize: outputBytes,
+                        TotalDuration:  endTime.Sub(startTime).Milliseconds(),
+                        Status:         proxyStatus,
+                        InputParams:    truncateString(string(bodyBytes), 4096),
+                        OutputParams:   "", // 流式响应无法捕获完整输出，非流式响应在此处也无法再读取
+                        ProviderName:   usedProvider.ProviderName,
+                        ProviderModel:  usedProvider.ProviderModelName,
+                        IsStream:       isStreamRequest(bodyBytes),
+                })
+        }
 }
 
 // ==================== 模型列表接口 ====================

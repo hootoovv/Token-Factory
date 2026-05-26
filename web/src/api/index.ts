@@ -234,6 +234,12 @@ export const adminAuditLogApi = {
   }) => api.get("/audit-logs", { params }),
 };
 
+// ==================== 管理员 - 调用记录 ====================
+export const adminCallRecordApi = {
+  list: () => api.get("/call-records"),
+  get: (id: number) => api.get(`/call-records/${id}`),
+};
+
 // ==================== 管理员 - 统计 ====================
 export const adminStatsApi = {
   overview: (timeFilter: string) =>

@@ -56,6 +56,11 @@ const router = createRouter({
               name: "AdminAuditLogs",
               component: () => import("../views/admin/AuditLogs.vue"),
             },
+            {
+              path: "call-records",
+              name: "AdminCallRecords",
+              component: () => import("../views/admin/CallRecords.vue"),
+            },
           ],
         },
         {

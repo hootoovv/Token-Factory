@@ -36,6 +36,12 @@
             </el-icon>
             <span>审计日志</span>
           </el-menu-item>
+          <el-menu-item index="/admin/call-records">
+            <el-icon>
+              <Phone />
+            </el-icon>
+            <span>调用记录</span>
+          </el-menu-item>
           <el-divider />
           <el-menu-item index="/">
             <el-icon>
@@ -55,6 +61,7 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import { useRoute } from 'vue-router'
+import { Phone } from '@element-plus/icons-vue'
 
 const route = useRoute()
 const activeMenu = computed(() => route.path)

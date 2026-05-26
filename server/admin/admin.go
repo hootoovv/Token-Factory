@@ -18,6 +18,7 @@ import (
         "time"
 
         "token_factory/cache"
+        "token_factory/callrecords"
         "token_factory/database"
         "token_factory/middleware"
         "token_factory/traffic"
@@ -49,6 +50,7 @@ type Server struct {
         cache           *cache.Cache
         debouncedCache  *cache.DebouncedCache // 4.3 修复：防抖缓存，避免频繁重载
         recorder        *traffic.Recorder
+        callRecords     *callrecords.Store // API调用记录存储
         jwtSecret       []byte
         encryptionKey   string // 3.1 修复：加密密钥，用于加密存储供应商API Key
         transmissionKey string // API Key传输加密密钥，用于前后端安全传输API Key
@@ -59,12 +61,13 @@ type Server struct {
 }
 
 // NewServer 创建管理端服务器
-func NewServer(db *gorm.DB, c *cache.Cache, r *traffic.Recorder, jwtSecret []byte, encryptionKey string, transmissionKey string, corsOrigins string, frontendFS embed.FS) *Server {
+func NewServer(db *gorm.DB, c *cache.Cache, r *traffic.Recorder, cr *callrecords.Store, jwtSecret []byte, encryptionKey string, transmissionKey string, corsOrigins string, frontendFS embed.FS) *Server {
         return &Server{
                 db:              db,
                 cache:           c,
                 debouncedCache:  cache.NewDebouncedCache(c, 2*time.Second), // 4.3 修复：2秒防抖延迟
                 recorder:        r,
+                callRecords:     cr,
                 jwtSecret:       jwtSecret,
                 encryptionKey:   encryptionKey,
                 transmissionKey: transmissionKey,
@@ -284,6 +287,10 @@ func (s *Server) Start(addr string) error {
 
                                 // 审计日志
                                 admin.GET("/audit-logs", s.handleListAuditLogs)
+
+                                // 调用记录
+                                admin.GET("/call-records", s.handleListCallRecords)
+                                admin.GET("/call-records/:id", s.handleGetCallRecord)
 
                                 // 缓存重载
                                 admin.POST("/cache/reload", s.handleCacheReload)
@@ -2083,4 +2090,47 @@ func generateAPIKey() string {
                 key[3+i] = charset[int(randBytes[i])%len(charset)]
         }
         return string(key)
+}
+
+// ==================== 调用记录接口 ====================
+
+// handleListCallRecords 获取最近N条API调用记录
+func (s *Server) handleListCallRecords(c *gin.Context) {
+	if s.callRecords == nil {
+		c.JSON(200, gin.H{
+			"items": []interface{}{},
+			"total": 0,
+		})
+		return
+	}
+
+	records := s.callRecords.GetAll()
+	c.JSON(200, gin.H{
+		"items": records,
+		"total": len(records),
+	})
+}
+
+// handleGetCallRecord 获取单条API调用记录详情
+func (s *Server) handleGetCallRecord(c *gin.Context) {
+	idStr := c.Param("id")
+	var id uint
+	fmt.Sscanf(idStr, "%d", &id)
+	if id == 0 {
+		c.JSON(400, gin.H{"error": "无效的记录ID"})
+		return
+	}
+
+	if s.callRecords == nil {
+		c.JSON(404, gin.H{"error": "记录不存在"})
+		return
+	}
+
+	record := s.callRecords.GetByID(id)
+	if record == nil {
+		c.JSON(404, gin.H{"error": "记录不存在"})
+		return
+	}
+
+	c.JSON(200, record)
 }

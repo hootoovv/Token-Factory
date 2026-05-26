@@ -13,6 +13,7 @@ import (
 
         "token_factory/admin"
         "token_factory/cache"
+        "token_factory/callrecords"
         "token_factory/config"
         "token_factory/database"
         "token_factory/proxy"
@@ -134,7 +135,11 @@ func main() {
         }
 
         // 11. 启动代理服务器 (:11444)
-        proxyServer := proxy.NewServer(cacheObj, recorder, &cfg.Proxy)
+        // 10.5 初始化API调用记录存储（内存环形缓冲，不持久化）
+        callRecordStore := callrecords.NewStore(cfg.CallRecordLimit)
+        log.Printf("[调用记录] 内存存储已初始化 (最多保留 %d 条记录)", cfg.CallRecordLimit)
+
+        proxyServer := proxy.NewServer(cacheObj, recorder, callRecordStore, &cfg.Proxy)
         go func() {
                 if err := proxyServer.Start(cfg.ProxyListen); err != nil {
                         log.Fatalf("代理服务器启动失败: %v", err)
@@ -158,7 +163,7 @@ func main() {
                 corsOrigins = cfg.CorsOrigins
                 log.Printf("[安全] 已从配置文件读取CORS来源配置")
         }
-        adminServer := admin.NewServer(db, cacheObj, recorder, jwtSecret, encryptionKey, transmissionKey, corsOrigins, frontendFS)
+        adminServer := admin.NewServer(db, cacheObj, recorder, callRecordStore, jwtSecret, encryptionKey, transmissionKey, corsOrigins, frontendFS)
         go func() {
                 if err := adminServer.Start(cfg.AdminListen); err != nil {
                         log.Fatalf("管理服务器启动失败: %v", err)

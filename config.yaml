@@ -36,6 +36,10 @@ encryption_key: "7o1S/nW9+6vYHBjfLy0MvFSNZwISsn2e9nbZFchRbBQ="
 # 为空时使用默认值: http://localhost:5173,http://localhost:8080,http://127.0.0.1:5173,http://127.0.0.1:8080
 cors_origins: "*"
 
+# 内存中保留的最近API调用记录条数（默认10，最大20）
+# 仅保存在内存中，不持久化到磁盘，重启后清空
+call_record_limit: 10
+
 # 代理策略配置
 proxy:
   # 供应商选择策略: sequential(顺序优先) / round-robin(负载轮询,默认) / random(随机负载均衡)

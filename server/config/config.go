@@ -9,14 +9,15 @@ import (
 
 // Config 主配置结构
 type Config struct {
-        ProxyListen   string         `yaml:"proxy_listen"`
-        AdminListen   string         `yaml:"admin_listen"`
-        Database      DatabaseConfig `yaml:"database"`
-        Admin         AdminConfig    `yaml:"admin"`
-        JWTSecret     string         `yaml:"jwt_secret"`
-        EncryptionKey string         `yaml:"encryption_key"` // 供应商API Key加密密钥（base64编码的32字节密钥）
-        CorsOrigins   string         `yaml:"cors_origins"`   // CORS允许的来源，逗号分隔；环境变量 CORS_ORIGINS 优先
-        Proxy         ProxyConfig    `yaml:"proxy"`
+        ProxyListen     string         `yaml:"proxy_listen"`
+        AdminListen     string         `yaml:"admin_listen"`
+        Database        DatabaseConfig `yaml:"database"`
+        Admin           AdminConfig    `yaml:"admin"`
+        JWTSecret       string         `yaml:"jwt_secret"`
+        EncryptionKey   string         `yaml:"encryption_key"`    // 供应商API Key加密密钥（base64编码的32字节密钥）
+        CorsOrigins     string         `yaml:"cors_origins"`      // CORS允许的来源，逗号分隔；环境变量 CORS_ORIGINS 优先
+        CallRecordLimit int            `yaml:"call_record_limit"` // 内存中保留的最近API调用记录条数（默认10，最大20）
+        Proxy           ProxyConfig    `yaml:"proxy"`
 }
 
 // DatabaseConfig 数据库配置
@@ -107,6 +108,14 @@ func LoadConfig(path string) (*Config, error) {
                 cfg.Proxy.DefaultTimeouts.StreamIdle = 15
         }
 
+        // 调用记录条数限制
+        if cfg.CallRecordLimit <= 0 {
+                cfg.CallRecordLimit = 10
+        }
+        if cfg.CallRecordLimit > 20 {
+                cfg.CallRecordLimit = 20
+        }
+
         // 自动状态管理默认值
         if cfg.Proxy.AutoStatus.ConsecutiveFailures == 0 {
                 cfg.Proxy.AutoStatus.ConsecutiveFailures = 2
@@ -141,9 +150,10 @@ func defaultConfig() *Config {
                         Username: "admin",
                         Password: "admin123",
                 },
-                JWTSecret:     "",
-                EncryptionKey: "",
-                CorsOrigins:   "", // 为空时使用硬编码默认值（本地开发环境）
+                JWTSecret:       "",
+                EncryptionKey:   "",
+                CorsOrigins:     "",  // 为空时使用硬编码默认值（本地开发环境）
+                CallRecordLimit: 10,  // 内存中保留的最近API调用记录条数
                 Proxy: ProxyConfig{
                         ProviderStrategy: "round-robin",
                         SessionAffinity:  true,
