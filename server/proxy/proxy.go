@@ -806,8 +806,13 @@ func (s *Server) handleProxy(w http.ResponseWriter, r *http.Request) {
                         totalCancel()
                         s.cache.UnregisterActiveRequest(provider.ProviderAPIKeyID, activeRequestID)
 
-                        // 采集流式输出数据（截断到合理大小防止内存问题）
-                        capturedOutput = truncateString(outputBuf.String(), 65536)
+                        // 采集流式输出数据：先聚合为完整的非流式响应，再截断到安全大小
+                        // 注意：必须先聚合再截断，因为SSE原始数据包含大量帧头开销（每个chunk都有
+                        // "data: {"choices":[{"delta":{"content":"..."}}]}",...），
+                        // 如果先截断再聚合，64KB的SSE原始数据可能只对应几千字节的实际内容，
+                        // 导致聚合结果严重不完整。聚合后的JSON远小于原始SSE，截断上限设为256KB。
+                        aggregatedOutput := callrecords.AggregateStreamOutput(outputBuf.String())
+                        capturedOutput = truncateString(aggregatedOutput, 262144)
 
                         streamDuration := time.Since(startTime)
                         if streamCopyErr != nil {
@@ -870,7 +875,7 @@ func (s *Server) handleProxy(w http.ResponseWriter, r *http.Request) {
                                 var fullOutput bytes.Buffer
                                 fullOutput.WriteByte(firstByte)
                                 fullOutput.Write(remainingData)
-                                capturedOutput = truncateString(fullOutput.String(), 65536)
+                                capturedOutput = truncateString(fullOutput.String(), 262144)
                         }
 
                         streamDuration := time.Since(startTime)

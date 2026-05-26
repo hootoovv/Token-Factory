@@ -50,23 +50,22 @@
     </el-table>
 
     <!-- 详情对话框 -->
-    <el-dialog v-model="detailVisible" title="调用详情" width="720px" destroy-on-close>
+    <el-dialog v-model="detailVisible" title="调用详情" width="1100px" destroy-on-close>
       <template v-if="detailRecord">
-        <el-descriptions :column="2" border size="small" style="margin-bottom: 16px">
-          <el-descriptions-item label="记录ID">{{ detailRecord.id }}</el-descriptions-item>
+        <el-descriptions :column="4" border size="small" style="margin-bottom: 16px">
           <el-descriptions-item label="时间">{{ formatDate(detailRecord.time) }}</el-descriptions-item>
           <el-descriptions-item label="调用者">{{ detailRecord.caller }}</el-descriptions-item>
           <el-descriptions-item label="模型名称">{{ detailRecord.model_name }}</el-descriptions-item>
-          <el-descriptions-item label="供应商">{{ detailRecord.provider_name }}</el-descriptions-item>
-          <el-descriptions-item label="供应商模型">{{ detailRecord.provider_model }}</el-descriptions-item>
-          <el-descriptions-item label="输入数据量">{{ formatBytes(detailRecord.input_data_size) }}</el-descriptions-item>
-          <el-descriptions-item label="输出数据量">{{ formatBytes(detailRecord.output_data_size) }}</el-descriptions-item>
-          <el-descriptions-item label="总用时">{{ formatDuration(detailRecord.total_duration) }}</el-descriptions-item>
           <el-descriptions-item label="状态">
             <el-tag :type="detailRecord.status === 'success' ? 'success' : 'danger'" size="small">
               {{ detailRecord.status === 'success' ? '成功' : '失败' }}
             </el-tag>
           </el-descriptions-item>
+          <el-descriptions-item label="供应商">{{ detailRecord.provider_name }}</el-descriptions-item>
+          <el-descriptions-item label="供应商模型">{{ detailRecord.provider_model }}</el-descriptions-item>
+          <el-descriptions-item label="输入数据量">{{ formatBytes(detailRecord.input_data_size) }}</el-descriptions-item>
+          <el-descriptions-item label="输出数据量">{{ formatBytes(detailRecord.output_data_size) }}</el-descriptions-item>
+          <el-descriptions-item label="总用时">{{ formatDuration(detailRecord.total_duration) }}</el-descriptions-item>
           <el-descriptions-item label="流式请求">
             <el-tag :type="detailRecord.is_stream ? 'primary' : 'info'" size="small">
               {{ detailRecord.is_stream ? '是' : '否' }}
@@ -74,29 +73,32 @@
           </el-descriptions-item>
         </el-descriptions>
 
-        <!-- 输入参数 -->
-        <div class="json-section">
-          <div class="json-header">
-            <span class="json-title">输入参数</span>
-            <el-button size="small" text @click="copyJson(detailRecord.input_params)">
-              <el-icon><CopyDocument /></el-icon> 复制
-            </el-button>
+        <!-- 输入输出左右布局 -->
+        <div class="json-panels">
+          <!-- 输入参数 -->
+          <div class="json-panel">
+            <div class="json-header">
+              <span class="json-title">输入参数</span>
+              <el-button size="small" text @click="copyJson(detailRecord.input_params)">
+                <el-icon><CopyDocument /></el-icon> 复制
+              </el-button>
+            </div>
+            <div class="json-block">
+              <pre>{{ formatJson(detailRecord.input_params) }}</pre>
+            </div>
           </div>
-          <div class="json-block">
-            <pre>{{ formatJson(detailRecord.input_params) }}</pre>
-          </div>
-        </div>
 
-        <!-- 输出参数 -->
-        <div class="json-section">
-          <div class="json-header">
-            <span class="json-title">输出参数</span>
-            <el-button size="small" text @click="copyJson(detailRecord.output_params)">
-              <el-icon><CopyDocument /></el-icon> 复制
-            </el-button>
-          </div>
-          <div class="json-block">
-            <pre>{{ detailRecord.output_params ? formatJson(detailRecord.output_params) : '（无输出数据）' }}</pre>
+          <!-- 输出参数 -->
+          <div class="json-panel">
+            <div class="json-header">
+              <span class="json-title">{{ detailRecord.is_stream ? '输出参数（流式聚合）' : '输出参数' }}</span>
+              <el-button size="small" text @click="copyJson(detailRecord.output_params)">
+                <el-icon><CopyDocument /></el-icon> 复制
+              </el-button>
+            </div>
+            <div class="json-block">
+              <pre>{{ detailRecord.output_params ? formatJson(detailRecord.output_params) : '（无输出数据）' }}</pre>
+            </div>
           </div>
         </div>
       </template>
@@ -163,7 +165,7 @@ function formatJson(str: string): string {
     const parsed = JSON.parse(str)
     return JSON.stringify(parsed, null, 2)
   } catch {
-    // 可能是SSE流式输出（data: ... 行），尝试逐行美化
+    // 可能是SSE流式输出的原始数据（聚合失败时的回退）
     if (str.includes('data: ')) {
       return formatSSE(str)
     }
@@ -172,6 +174,7 @@ function formatJson(str: string): string {
 }
 
 function formatSSE(str: string): string {
+  // 此函数仅在后端SSE聚合失败时作为回退使用
   const lines = str.split('\n')
   const result: string[] = []
   for (const line of lines) {
@@ -250,8 +253,14 @@ onMounted(() => {
   cursor: pointer;
 }
 
-.json-section {
-  margin-bottom: 16px;
+.json-panels {
+  display: flex;
+  gap: 16px;
+}
+
+.json-panel {
+  flex: 1;
+  min-width: 0;
 }
 
 .json-header {
@@ -272,7 +281,7 @@ onMounted(() => {
   border: 1px solid #e4e7ed;
   border-radius: 4px;
   padding: 12px 16px;
-  max-height: 320px;
+  max-height: 480px;
   overflow: auto;
 }
 
