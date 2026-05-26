@@ -100,9 +100,18 @@ func (s *Store) Limit() int {
 
 // AggregateStreamOutput 将原始SSE流式数据聚合为完整的非流式API响应JSON
 // 解析SSE格式（data: {json}\n\n），提取所有chunk中的内容，合并为一条完整的响应
-// 支持的格式：
-//   - OpenAI Chat Completion 流式响应（delta.content / delta.tool_calls / delta.function_call）
-//   - 包含 usage 字段的最后一个chunk
+//
+// 聚合策略（全量保留所有JSON字段）：
+//   - 顶层字段：保留所有字段，首次出现的值优先（id/object/created/model 等），
+//     usage 等出现在后续 chunk 中的字段取最后非空值
+//   - choices[].delta：转为 choices[].message，所有字段全量保留
+//     - 字符串字段（content/reasoning_content/refusal 等）：拼接
+//     - role 字段：取首个非空值
+//     - tool_calls：增量拼接（id/name 仅首次，arguments 拼接）
+//     - function_call：增量拼接（name 仅首次，arguments 拼接）
+//     - 其他未知字段：非字符串取最后值，字符串拼接
+//   - choices[].finish_reason：取最后非空值
+//   - choices 中除 index/delta/finish_reason 外的其他字段：保留最后值
 //
 // 如果解析失败（非SSE格式），返回原始数据
 func AggregateStreamOutput(rawOutput string) string {
@@ -117,18 +126,15 @@ func AggregateStreamOutput(rawOutput string) string {
 
 	lines := strings.Split(rawOutput, "\n")
 
-	// 用于聚合的结构
-	var aggregated struct {
-		ID      string                 `json:"id"`
-		Object  string                 `json:"object"`
-		Created int64                  `json:"created,omitempty"`
-		Model   string                 `json:"model,omitempty"`
-		Choices []AggregatedChoice     `json:"choices"`
-		Usage   map[string]interface{} `json:"usage,omitempty"`
-	}
+	// 使用 map 存储聚合结果，全量保留所有字段
+	aggregated := make(map[string]interface{})
 
 	// choices 按 index 聚合
-	choiceMap := make(map[int]*AggregatedChoice)
+	type choiceState struct {
+		choice  map[string]interface{} // choice 级别的所有字段（index/finish_reason/logprobs/等）
+		message map[string]interface{} // 从 delta 合并而来的 message（全量保留所有字段）
+	}
+	choiceMap := make(map[int]*choiceState)
 
 	chunkCount := 0
 	for _, line := range lines {
@@ -148,31 +154,12 @@ func AggregateStreamOutput(rawOutput string) string {
 		// 解析chunk JSON
 		var chunk map[string]interface{}
 		if err := json.Unmarshal([]byte(dataStr), &chunk); err != nil {
-			// 解析失败，跳过此行
 			continue
 		}
 		chunkCount++
 
-		// 提取顶层字段（取第一个有效chunk的值）
-		if aggregated.ID == "" {
-			if id, ok := chunk["id"].(string); ok {
-				aggregated.ID = id
-			}
-			if obj, ok := chunk["object"].(string); ok {
-				aggregated.Object = obj
-			}
-			if created, ok := chunk["created"].(float64); ok {
-				aggregated.Created = int64(created)
-			}
-			if model, ok := chunk["model"].(string); ok {
-				aggregated.Model = model
-			}
-		}
-
-		// 提取 usage（通常在最后一个chunk中出现）
-		if usage, ok := chunk["usage"].(map[string]interface{}); ok {
-			aggregated.Usage = usage
-		}
+		// 合并顶层字段（全量保留）
+		mergeTopLevel(aggregated, chunk)
 
 		// 提取 choices
 		choices, ok := chunk["choices"].([]interface{})
@@ -191,45 +178,23 @@ func AggregateStreamOutput(rawOutput string) string {
 				idx = int(index)
 			}
 
-			// 获取或创建聚合choice
+			// 获取或创建聚合 choice
 			if _, exists := choiceMap[idx]; !exists {
-				choiceMap[idx] = &AggregatedChoice{
-					Index: idx,
-					Message: &AggregatedMessage{
-						Role:    "assistant",
-						Content: "",
-					},
-					FinishReason: nil,
+				choiceMap[idx] = &choiceState{
+					choice:  make(map[string]interface{}),
+					message: make(map[string]interface{}),
 				}
+				choiceMap[idx].choice["index"] = idx
+				choiceMap[idx].message["role"] = "assistant"
 			}
-			aggChoice := choiceMap[idx]
+			cs := choiceMap[idx]
 
-			// 提取 delta
-			delta, ok := choiceData["delta"].(map[string]interface{})
-			if ok {
-				// 提取 role（通常在第一个chunk中）
-				if role, ok := delta["role"].(string); ok && role != "" {
-					aggChoice.Message.Role = role
-				}
-				// 提取 content
-				if content, ok := delta["content"].(string); ok {
-					aggChoice.Message.Content += content
-				}
-				// 提取 tool_calls（函数调用）
-				if toolCalls, ok := delta["tool_calls"].([]interface{}); ok {
-					aggChoice.aggregateToolCalls(toolCalls)
-				}
-				// 提取 function_call（旧版函数调用）
-				if fnCall, ok := delta["function_call"].(map[string]interface{}); ok {
-					aggChoice.aggregateFunctionCall(fnCall)
-				}
-			}
+			// 合并 choice 级别字段（除 delta 外的所有字段全量保留）
+			mergeChoiceFields(cs.choice, choiceData)
 
-			// 提取 finish_reason
-			if fr, ok := choiceData["finish_reason"]; ok && fr != nil {
-				if frStr, ok := fr.(string); ok && frStr != "" {
-					aggChoice.FinishReason = &frStr
-				}
+			// 合并 delta → message（全量保留所有字段）
+			if delta, ok := choiceData["delta"].(map[string]interface{}); ok {
+				mergeDeltaToMessage(cs.message, delta)
 			}
 		}
 	}
@@ -240,15 +205,22 @@ func AggregateStreamOutput(rawOutput string) string {
 	}
 
 	// 构建 choices 列表（按 index 排序）
+	choicesList := make([]interface{}, 0, len(choiceMap))
 	for i := 0; i < len(choiceMap); i++ {
-		if choice, ok := choiceMap[i]; ok {
-			aggregated.Choices = append(aggregated.Choices, *choice)
+		cs, ok := choiceMap[i]
+		if !ok {
+			continue
 		}
+		// 将 message 写入 choice
+		choice := cs.choice
+		choice["message"] = cs.message
+		choicesList = append(choicesList, choice)
 	}
+	aggregated["choices"] = choicesList
 
 	// 将 object 从 "chat.completion.chunk" 改为 "chat.completion"
-	if aggregated.Object == "chat.completion.chunk" {
-		aggregated.Object = "chat.completion"
+	if obj, ok := aggregated["object"].(string); ok && obj == "chat.completion.chunk" {
+		aggregated["object"] = "chat.completion"
 	}
 
 	// 序列化为美化的JSON
@@ -261,38 +233,142 @@ func AggregateStreamOutput(rawOutput string) string {
 	return string(result)
 }
 
-// AggregatedChoice 聚合后的选择项
-type AggregatedChoice struct {
-	Index        int                  `json:"index"`
-	Message      *AggregatedMessage   `json:"message"`
-	FinishReason *string              `json:"finish_reason"`
-	ToolCalls    []AggregatedToolCall `json:"tool_calls,omitempty"`
+// mergeTopLevel 合并顶层字段到聚合结果
+// 策略：首次出现的值优先（id/object/created/model 等标识字段不覆盖），
+// 其余字段（usage/system_fingerprint/service_tier 等）取最后非nil值
+func mergeTopLevel(aggregated map[string]interface{}, chunk map[string]interface{}) {
+	// 仅在首次出现时设置的字段（响应标识，不应被后续chunk覆盖）
+	topLevelFirstSet := map[string]bool{
+		"id":      true,
+		"object":  true,
+		"created": true,
+		"model":   true,
+	}
+
+	for k, v := range chunk {
+		// choices 单独处理
+		if k == "choices" {
+			continue
+		}
+		if topLevelFirstSet[k] {
+			// 标识字段：仅首次设置
+			if _, exists := aggregated[k]; !exists {
+				aggregated[k] = v
+			}
+		} else {
+			// 其他字段：后出现的覆盖（usage/system_fingerprint 等取最后值）
+			if v != nil {
+				aggregated[k] = v
+			}
+		}
+	}
 }
 
-// AggregatedMessage 聚合后的消息
-type AggregatedMessage struct {
-	Role      string               `json:"role"`
-	Content   string               `json:"content"`
-	ToolCalls []AggregatedToolCall `json:"tool_calls,omitempty"`
-	FuncCall  *AggregatedFuncCall  `json:"function_call,omitempty"`
+// mergeChoiceFields 合并 choice 级别字段（除 delta 外）
+// 保留所有字段，delta 单独处理不在此处合并
+func mergeChoiceFields(choice map[string]interface{}, choiceData map[string]interface{}) {
+	for k, v := range choiceData {
+		// delta 和 message 由 mergeDeltaToMessage 单独处理
+		if k == "delta" || k == "message" {
+			continue
+		}
+		// index 仅首次设置
+		if k == "index" {
+			if _, exists := choice[k]; !exists {
+				choice[k] = v
+			}
+			continue
+		}
+		// finish_reason：取最后非nil非空值
+		if k == "finish_reason" {
+			if v != nil {
+				if strVal, ok := v.(string); ok && strVal != "" {
+					choice[k] = v
+				} else if !ok {
+					// 非字符串类型（如 null），跳过
+				}
+			}
+			continue
+		}
+		// 其他字段（logprobs 等）：取最后非nil值
+		if v != nil {
+			choice[k] = v
+		}
+	}
 }
 
-// AggregatedToolCall 聚合后的工具调用项
-type AggregatedToolCall struct {
-	Index    int                `json:"index"`
-	ID       string             `json:"id"`
-	Type     string             `json:"type"`
-	Function *AggregatedFuncCall `json:"function"`
+// mergeDeltaToMessage 将 delta 中的字段合并到 message
+// 策略：
+//   - role：取首个非空值
+//   - tool_calls：增量拼接（id/name 仅首次，arguments 拼接）
+//   - function_call：增量拼接（name 仅首次，arguments 拼接）
+//   - 其他字符串字段（content/reasoning_content/refusal/等）：拼接
+//   - 其他非字符串字段：取最后非nil值
+func mergeDeltaToMessage(message map[string]interface{}, delta map[string]interface{}) {
+	for k, v := range delta {
+		switch k {
+		case "role":
+			// role：取首个非空值
+			if v != nil {
+				if strVal, ok := v.(string); ok && strVal != "" {
+					if existing, ok := message["role"].(string); !ok || existing == "" {
+						message["role"] = strVal
+					}
+				}
+			}
+
+		case "tool_calls":
+			// tool_calls：增量拼接
+			if toolCallDeltas, ok := v.([]interface{}); ok {
+				mergeToolCalls(message, toolCallDeltas)
+			}
+
+		case "function_call":
+			// function_call：增量拼接
+			if fnCallDelta, ok := v.(map[string]interface{}); ok {
+				mergeFunctionCall(message, fnCallDelta)
+			}
+
+		default:
+			// 其他字段：字符串拼接，非字符串取最后值
+			if v == nil {
+				continue
+			}
+			if strVal, ok := v.(string); ok {
+				// 字符串字段：拼接（content/reasoning_content/refusal/等）
+				if existing, ok := message[k].(string); ok {
+					message[k] = existing + strVal
+				} else {
+					message[k] = strVal
+				}
+			} else {
+				// 非字符串字段：取最后值
+				message[k] = v
+			}
+		}
+	}
 }
 
-// AggregatedFuncCall 聚合后的函数调用
-type AggregatedFuncCall struct {
-	Name      string `json:"name"`
-	Arguments string `json:"arguments"`
-}
+// mergeToolCalls 将增量 tool_calls delta 拼接到 message 的 tool_calls 列表
+// tool_calls 结构：
+//
+//	delta: {"tool_calls": [{"index":0, "id":"call_xxx", "type":"function", "function":{"name":"fn","arguments":"..."}}]}
+//
+// 聚合规则：
+//   - index 用于匹配同一组 tool call
+//   - id/type/function.name 仅首次设置
+//   - function.arguments 拼接
+func mergeToolCalls(message map[string]interface{}, deltas []interface{}) {
+	// 获取或创建 tool_calls 列表
+	var toolCalls []map[string]interface{}
+	if existing, ok := message["tool_calls"].([]interface{}); ok {
+		for _, tc := range existing {
+			if tcMap, ok := tc.(map[string]interface{}); ok {
+				toolCalls = append(toolCalls, tcMap)
+			}
+		}
+	}
 
-// aggregateToolCalls 将增量 tool_calls delta 拼接到 choice 的 tool_calls 列表
-func (c *AggregatedChoice) aggregateToolCalls(deltas []interface{}) {
 	for _, d := range deltas {
 		delta, ok := d.(map[string]interface{})
 		if !ok {
@@ -304,50 +380,88 @@ func (c *AggregatedChoice) aggregateToolCalls(deltas []interface{}) {
 			tcIndex = int(idx)
 		}
 
-		// 扩展切片以容纳此index
-		for len(c.Message.ToolCalls) <= tcIndex {
-			c.Message.ToolCalls = append(c.Message.ToolCalls, AggregatedToolCall{
-				Index:    len(c.Message.ToolCalls),
-				ID:       "",
-				Type:     "function",
-				Function: &AggregatedFuncCall{},
+		// 扩展切片以容纳此 index
+		for len(toolCalls) <= tcIndex {
+			toolCalls = append(toolCalls, map[string]interface{}{
+				"index":    len(toolCalls),
+				"id":       "",
+				"type":     "function",
+				"function": map[string]interface{}{"name": "", "arguments": ""},
 			})
 		}
 
-		tc := &c.Message.ToolCalls[tcIndex]
+		tc := toolCalls[tcIndex]
 
 		// ID 仅设置一次
 		if id, ok := delta["id"].(string); ok && id != "" {
-			tc.ID = id
+			tc["id"] = id
 		}
 		// type 仅设置一次
 		if typ, ok := delta["type"].(string); ok && typ != "" {
-			tc.Type = typ
+			tc["type"] = typ
 		}
 		// function delta
 		if fnDelta, ok := delta["function"].(map[string]interface{}); ok {
+			fnMap, ok := tc["function"].(map[string]interface{})
+			if !ok {
+				fnMap = make(map[string]interface{})
+				tc["function"] = fnMap
+			}
 			if name, ok := fnDelta["name"].(string); ok && name != "" {
-				tc.Function.Name = name
+				fnMap["name"] = name
 			}
 			if args, ok := fnDelta["arguments"].(string); ok {
-				tc.Function.Arguments += args
+				if existingArgs, ok := fnMap["arguments"].(string); ok {
+					fnMap["arguments"] = existingArgs + args
+				} else {
+					fnMap["arguments"] = args
+				}
+			}
+			// function 中的其他未知字段也全量保留
+			for k, v := range fnDelta {
+				if k != "name" && k != "arguments" && v != nil {
+					fnMap[k] = v
+				}
+			}
+		}
+
+		// tool_call 中的其他未知字段也全量保留（除 index/id/type/function）
+		for k, v := range delta {
+			if k != "index" && k != "id" && k != "type" && k != "function" && v != nil {
+				tc[k] = v
 			}
 		}
 	}
 
-	// 同步到 choice 层级的 ToolCalls（用于 JSON 输出）
-	c.ToolCalls = c.Message.ToolCalls
+	// 写回 message
+	tcInterface := make([]interface{}, len(toolCalls))
+	for i, tc := range toolCalls {
+		tcInterface[i] = tc
+	}
+	message["tool_calls"] = tcInterface
 }
 
-// aggregateFunctionCall 将旧版 function_call delta 拼接到 choice
-func (c *AggregatedChoice) aggregateFunctionCall(delta map[string]interface{}) {
-	if c.Message.FuncCall == nil {
-		c.Message.FuncCall = &AggregatedFuncCall{}
+// mergeFunctionCall 将旧版 function_call delta 拼接到 message
+func mergeFunctionCall(message map[string]interface{}, delta map[string]interface{}) {
+	fnMap, ok := message["function_call"].(map[string]interface{})
+	if !ok {
+		fnMap = make(map[string]interface{})
+		message["function_call"] = fnMap
 	}
 	if name, ok := delta["name"].(string); ok && name != "" {
-		c.Message.FuncCall.Name = name
+		fnMap["name"] = name
 	}
 	if args, ok := delta["arguments"].(string); ok {
-		c.Message.FuncCall.Arguments += args
+		if existingArgs, ok := fnMap["arguments"].(string); ok {
+			fnMap["arguments"] = existingArgs + args
+		} else {
+			fnMap["arguments"] = args
+		}
+	}
+	// function_call 中的其他未知字段也全量保留
+	for k, v := range delta {
+		if k != "name" && k != "arguments" && v != nil {
+			fnMap[k] = v
+		}
 	}
 }
