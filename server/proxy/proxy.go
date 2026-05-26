@@ -925,7 +925,7 @@ func (s *Server) handleProxy(w http.ResponseWriter, r *http.Request) {
                                 OutputDataSize: 0,
                                 TotalDuration:  endTime.Sub(startTime).Milliseconds(),
                                 Status:         "error",
-                                InputParams:    truncateString(string(bodyBytes), 4096),
+                                InputParams:    callrecords.DecodeJSON(truncateString(string(bodyBytes), 262144)),
                                 OutputParams:   truncateString(errMsg, 4096),
                                 ProviderName:   usedProvider.ProviderName,
                                 ProviderModel:  usedProvider.ProviderModelName,
@@ -969,7 +969,7 @@ func (s *Server) handleProxy(w http.ResponseWriter, r *http.Request) {
                         OutputDataSize: outputBytes,
                         TotalDuration:  endTime.Sub(startTime).Milliseconds(),
                         Status:         proxyStatus,
-                        InputParams:    truncateString(string(bodyBytes), 4096),
+                        InputParams:    callrecords.DecodeJSON(truncateString(string(bodyBytes), 262144)),
                         OutputParams:   capturedOutput, // 采集的完整输出数据（流式/非流式均支持）
                         ProviderName:   usedProvider.ProviderName,
                         ProviderModel:  usedProvider.ProviderModelName,
