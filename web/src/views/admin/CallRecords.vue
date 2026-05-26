@@ -96,7 +96,7 @@
             </el-button>
           </div>
           <div class="json-block">
-            <pre>{{ detailRecord.output_params ? formatJson(detailRecord.output_params) : '（流式响应或无输出数据）' }}</pre>
+            <pre>{{ detailRecord.output_params ? formatJson(detailRecord.output_params) : '（无输出数据）' }}</pre>
           </div>
         </div>
       </template>
@@ -163,8 +163,35 @@ function formatJson(str: string): string {
     const parsed = JSON.parse(str)
     return JSON.stringify(parsed, null, 2)
   } catch {
+    // 可能是SSE流式输出（data: ... 行），尝试逐行美化
+    if (str.includes('data: ')) {
+      return formatSSE(str)
+    }
     return str
   }
+}
+
+function formatSSE(str: string): string {
+  const lines = str.split('\n')
+  const result: string[] = []
+  for (const line of lines) {
+    if (line.startsWith('data: ')) {
+      const data = line.slice(6)
+      if (data === '[DONE]') {
+        result.push('data: [DONE]')
+      } else {
+        try {
+          const parsed = JSON.parse(data)
+          result.push('data: ' + JSON.stringify(parsed, null, 2).split('\n').map((l, i) => i === 0 ? l : '      ' + l).join('\n'))
+        } catch {
+          result.push(line)
+        }
+      }
+    } else {
+      result.push(line)
+    }
+  }
+  return result.join('\n')
 }
 
 async function copyJson(str: string) {

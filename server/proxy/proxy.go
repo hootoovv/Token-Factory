@@ -1,6 +1,7 @@
 package proxy
 
 import (
+        "bytes"
         "context"
         "encoding/json"
         "errors"
@@ -309,18 +310,24 @@ func readFirstByteWithTimeout(body io.Reader, firstTokenTimeout time.Duration, t
 // 在流式响应（如SSE）中，如果两次数据传输之间的空闲时间超过 idleTimeout，则返回错误
 // 同时监控总超时 context，确保绝对时间不超过限制
 // providerName 用于debug日志标识
-func streamingCopy(dst http.ResponseWriter, src io.ReadCloser, firstByte byte, idleTimeout time.Duration, totalCtx context.Context, providerName string) (int64, error) {
+// outputBuf 如果非nil，会同时将传输的数据写入该buffer用于调用记录采集
+func streamingCopy(dst http.ResponseWriter, src io.ReadCloser, firstByte byte, idleTimeout time.Duration, totalCtx context.Context, providerName string, outputBuf *bytes.Buffer) (int64, error) {
         var totalWritten int64
         buf := make([]byte, 32*1024)
         chunkCount := 0
         // copyStart := time.Now()
 
         // 先写入已读取的首字节
-        n, err := dst.Write([]byte{firstByte})
+        firstByteData := []byte{firstByte}
+        n, err := dst.Write(firstByteData)
         totalWritten += int64(n)
         if err != nil {
                 // log.Printf("[DEBUG] [%s] 写入首字节失败: %v (耗时: %v)", providerName, err, time.Since(copyStart))
                 return totalWritten, fmt.Errorf("写入首字节失败: %w", err)
+        }
+        // 同时写入采集buffer
+        if outputBuf != nil {
+                outputBuf.Write(firstByteData)
         }
         // 立即 flush，确保客户端尽快收到首字节
         if f, ok := dst.(http.Flusher); ok {
@@ -373,6 +380,10 @@ func streamingCopy(dst http.ResponseWriter, src io.ReadCloser, firstByte byte, i
                                         // log.Printf("[DEBUG] [%s] 写入客户端失败(第%d个chunk): %v", providerName, chunkCount, ew)
                                         return totalWritten, fmt.Errorf("写入响应失败: %w", ew)
                                 }
+                                // 同时写入采集buffer
+                                if outputBuf != nil {
+                                        outputBuf.Write(buf[:result.n])
+                                }
                                 // 每次写入后 flush，确保流式数据及时推送到客户端
                                 if f, ok := dst.(http.Flusher); ok {
                                         f.Flush()
@@ -405,7 +416,8 @@ func streamingCopy(dst http.ResponseWriter, src io.ReadCloser, firstByte byte, i
 //   1. 流Idle超时（默认15秒）可能在非流式响应的TCP段间触发，导致响应被截断
 //   2. 逐块flush与上游Content-Length头冲突，导致客户端解析失败
 //   3. 对非流式响应做逐字节flush没有意义（客户端需要完整JSON才能解析）
-func bufferedCopy(dst http.ResponseWriter, src io.ReadCloser, totalCtx context.Context, providerName string) (int64, error) {
+// 返回值：写入字节数、响应体数据（用于调用记录采集）、错误
+func bufferedCopy(dst http.ResponseWriter, src io.ReadCloser, totalCtx context.Context, providerName string) (int64, []byte, error) {
         // 带超时的完整读取
         type readResult struct {
                 data []byte
@@ -422,12 +434,12 @@ func bufferedCopy(dst http.ResponseWriter, src io.ReadCloser, totalCtx context.C
         select {
         case result := <-resultCh:
                 if result.err != nil {
-                        return 0, fmt.Errorf("读取响应体失败: %w", result.err)
+                        return 0, nil, fmt.Errorf("读取响应体失败: %w", result.err)
                 }
                 n, err := dst.Write(result.data)
-                return int64(n), err
+                return int64(n), result.data, err
         case <-totalCtx.Done():
-                return 0, fmt.Errorf("总超时到期: %w", totalCtx.Err())
+                return 0, nil, fmt.Errorf("总超时到期: %w", totalCtx.Err())
         }
 }
 
@@ -564,6 +576,7 @@ func (s *Server) handleProxy(w http.ResponseWriter, r *http.Request) {
         var outputBytes int64
         var resp *http.Response
         var streamCopyErr error
+        var capturedOutput string // 采集的完整输出数据（用于调用记录）
         proxyStatus := "error"
 
         // 2.9 修复：添加请求体大小限制，防止OOM攻击
@@ -785,10 +798,16 @@ func (s *Server) handleProxy(w http.ResponseWriter, r *http.Request) {
                         }
                         w.WriteHeader(resp.StatusCode)
 
+                        // 创建输出采集buffer，用于记录流式响应的完整输出
+                        var outputBuf bytes.Buffer
+
                         // streamingCopy 在流式传输中监控 idle 超时和总超时
-                        outputBytes, streamCopyErr = streamingCopy(w, resp.Body, firstByte, timeouts.StreamIdle, totalCtx, provider.ProviderName)
+                        outputBytes, streamCopyErr = streamingCopy(w, resp.Body, firstByte, timeouts.StreamIdle, totalCtx, provider.ProviderName, &outputBuf)
                         totalCancel()
                         s.cache.UnregisterActiveRequest(provider.ProviderAPIKeyID, activeRequestID)
+
+                        // 采集流式输出数据（截断到合理大小防止内存问题）
+                        capturedOutput = truncateString(outputBuf.String(), 65536)
 
                         streamDuration := time.Since(startTime)
                         if streamCopyErr != nil {
@@ -841,10 +860,18 @@ func (s *Server) handleProxy(w http.ResponseWriter, r *http.Request) {
                         }
 
                         // 读取并写入剩余响应体（带总超时，无流Idle超时）
-                        remainingBytes, remainingErr := bufferedCopy(w, resp.Body, totalCtx, provider.ProviderName)
+                        remainingBytes, remainingData, remainingErr := bufferedCopy(w, resp.Body, totalCtx, provider.ProviderName)
                         outputBytes += remainingBytes
                         totalCancel()
                         s.cache.UnregisterActiveRequest(provider.ProviderAPIKeyID, activeRequestID)
+
+                        // 采集非流式输出数据：首字节 + 剩余体
+                        if remainingData != nil {
+                                var fullOutput bytes.Buffer
+                                fullOutput.WriteByte(firstByte)
+                                fullOutput.Write(remainingData)
+                                capturedOutput = truncateString(fullOutput.String(), 65536)
+                        }
 
                         streamDuration := time.Since(startTime)
                         if remainingErr != nil {
@@ -938,7 +965,7 @@ func (s *Server) handleProxy(w http.ResponseWriter, r *http.Request) {
                         TotalDuration:  endTime.Sub(startTime).Milliseconds(),
                         Status:         proxyStatus,
                         InputParams:    truncateString(string(bodyBytes), 4096),
-                        OutputParams:   "", // 流式响应无法捕获完整输出，非流式响应在此处也无法再读取
+                        OutputParams:   capturedOutput, // 采集的完整输出数据（流式/非流式均支持）
                         ProviderName:   usedProvider.ProviderName,
                         ProviderModel:  usedProvider.ProviderModelName,
                         IsStream:       isStreamRequest(bodyBytes),
