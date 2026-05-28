@@ -55,7 +55,7 @@
         <el-descriptions :column="4" border size="small" style="margin-bottom: 16px">
           <el-descriptions-item label="时间">{{ formatDate(detailRecord.time) }}</el-descriptions-item>
           <el-descriptions-item label="调用者">{{ detailRecord.caller }}</el-descriptions-item>
-          <el-descriptions-item label="模型名称">{{ detailRecord.model_name }}</el-descriptions-item>
+          <el-descriptions-item label="总用时">{{ formatDuration(detailRecord.total_duration) }}</el-descriptions-item>
           <el-descriptions-item label="状态">
             <el-tag :type="detailRecord.status === 'success' ? 'success' : 'danger'" size="small">
               {{ detailRecord.status === 'success' ? '成功' : '失败' }}
@@ -63,14 +63,14 @@
           </el-descriptions-item>
           <el-descriptions-item label="供应商">{{ detailRecord.provider_name }}</el-descriptions-item>
           <el-descriptions-item label="供应商模型">{{ detailRecord.provider_model }}</el-descriptions-item>
-          <el-descriptions-item label="输入数据量">{{ formatBytes(detailRecord.input_data_size) }}</el-descriptions-item>
-          <el-descriptions-item label="输出数据量">{{ formatBytes(detailRecord.output_data_size) }}</el-descriptions-item>
-          <el-descriptions-item label="总用时">{{ formatDuration(detailRecord.total_duration) }}</el-descriptions-item>
+          <el-descriptions-item label="模型名称">{{ detailRecord.model_name }}</el-descriptions-item>
           <el-descriptions-item label="流式请求">
             <el-tag :type="detailRecord.is_stream ? 'primary' : 'info'" size="small">
               {{ detailRecord.is_stream ? '是' : '否' }}
             </el-tag>
           </el-descriptions-item>
+          <el-descriptions-item label="输入数据量">{{ formatBytes(detailRecord.input_data_size) }}</el-descriptions-item>
+          <el-descriptions-item label="输出数据量">{{ formatBytes(detailRecord.output_data_size) }}</el-descriptions-item>
           <el-descriptions-item label="调用接口">{{ detailRecord.endpoint || '-' }}</el-descriptions-item>
         </el-descriptions>
 
