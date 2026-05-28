@@ -521,6 +521,13 @@ func classifyErrorStatus(statusCode int, errorBody string) string {
 func (s *Server) handleProxy(w http.ResponseWriter, r *http.Request) {
         startTime := time.Now()
 
+        // 提取调用接口（去除版本前缀的子路由，如 /v1/chat/completions → chat/completions）
+        endpoint := strings.TrimPrefix(r.URL.Path, "/v1/")
+        if endpoint == r.URL.Path {
+                // 没有 /v1/ 前缀，去除前导斜杠
+                endpoint = strings.TrimPrefix(r.URL.Path, "/")
+        }
+
         // 1. 验证API-Key
         apiKey := extractAPIKey(r)
         keyInfo := s.cache.GetAPIKeyInfo(apiKey)
@@ -927,6 +934,7 @@ func (s *Server) handleProxy(w http.ResponseWriter, r *http.Request) {
                                 Time:           startTime,
                                 Caller:         keyInfo.UserName,
                                 ModelName:      modelName,
+                                Endpoint:       endpoint,
                                 InputDataSize:  inputBytes,
                                 OutputDataSize: 0,
                                 TotalDuration:  endTime.Sub(startTime).Milliseconds(),
@@ -971,6 +979,7 @@ func (s *Server) handleProxy(w http.ResponseWriter, r *http.Request) {
                         Time:           startTime,
                         Caller:         keyInfo.UserName,
                         ModelName:      modelName,
+                        Endpoint:       endpoint,
                         InputDataSize:  inputBytes,
                         OutputDataSize: outputBytes,
                         TotalDuration:  endTime.Sub(startTime).Milliseconds(),

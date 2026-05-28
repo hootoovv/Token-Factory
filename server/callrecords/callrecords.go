@@ -14,6 +14,7 @@ type CallRecord struct {
         Time           time.Time `json:"time"`             // 调用时间
         Caller         string    `json:"caller"`           // 调用者（用户名）
         ModelName      string    `json:"model_name"`       // 模型名称
+        Endpoint       string    `json:"endpoint"`         // 调用接口（去除版本前缀的子路由，如 chat/completions）
         InputDataSize  int64     `json:"input_data_size"`  // 输入数据量（字节）
         OutputDataSize int64     `json:"output_data_size"` // 输出数据量（字节）
         TotalDuration  int64     `json:"total_duration"`   // 总用时（毫秒）

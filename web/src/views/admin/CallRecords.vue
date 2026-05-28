@@ -71,6 +71,7 @@
               {{ detailRecord.is_stream ? '是' : '否' }}
             </el-tag>
           </el-descriptions-item>
+          <el-descriptions-item label="调用接口">{{ detailRecord.endpoint || '-' }}</el-descriptions-item>
         </el-descriptions>
 
         <!-- 输入输出左右布局 -->
@@ -116,6 +117,7 @@ interface CallRecord {
   time: string
   caller: string
   model_name: string
+  endpoint: string
   input_data_size: number
   output_data_size: number
   total_duration: number
