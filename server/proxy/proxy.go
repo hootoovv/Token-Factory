@@ -2,6 +2,7 @@ package proxy
 
 import (
         "bytes"
+        "compress/gzip"
         "context"
         "encoding/json"
         "errors"
@@ -806,13 +807,16 @@ func (s *Server) handleProxy(w http.ResponseWriter, r *http.Request) {
                         totalCancel()
                         s.cache.UnregisterActiveRequest(provider.ProviderAPIKeyID, activeRequestID)
 
-                        // 采集流式输出数据：先聚合为完整的非流式响应，再截断到安全大小
+                        // 采集流式输出数据：先解压gzip（如果有），再聚合为完整的非流式响应，再UTF-8解码，最后截断到安全大小
                         // 注意：必须先聚合再截断，因为SSE原始数据包含大量帧头开销（每个chunk都有
                         // "data: {"choices":[{"delta":{"content":"..."}}]}",...），
                         // 如果先截断再聚合，64KB的SSE原始数据可能只对应几千字节的实际内容，
                         // 导致聚合结果严重不完整。聚合后的JSON远小于原始SSE，截断上限设为256KB。
-                        aggregatedOutput := callrecords.AggregateStreamOutput(outputBuf.String())
-                        capturedOutput = truncateString(aggregatedOutput, 262144)
+                        // 注意：必须先UTF-8解码再截断，否则截断可能切断\uXXXX转义序列导致乱码。
+                        // 流式响应通常不会gzip压缩（SSE需要逐块传输），但防御性检测
+                        rawStreamOutput := string(decompressGzipIfNeeded(outputBuf.Bytes()))
+                        aggregatedOutput := callrecords.AggregateStreamOutput(rawStreamOutput)
+                        capturedOutput = truncateString(callrecords.DecodeJSON(aggregatedOutput), 262144)
 
                         streamDuration := time.Since(startTime)
                         if streamCopyErr != nil {
@@ -871,11 +875,13 @@ func (s *Server) handleProxy(w http.ResponseWriter, r *http.Request) {
                         s.cache.UnregisterActiveRequest(provider.ProviderAPIKeyID, activeRequestID)
 
                         // 采集非流式输出数据：首字节 + 剩余体
+                        // 先解压gzip（如果上游返回了压缩数据），再UTF-8解码，最后截断
                         if remainingData != nil {
                                 var fullOutput bytes.Buffer
                                 fullOutput.WriteByte(firstByte)
                                 fullOutput.Write(remainingData)
-                                capturedOutput = truncateString(fullOutput.String(), 262144)
+                                decompressed := decompressGzipIfNeeded(fullOutput.Bytes())
+                                capturedOutput = truncateString(callrecords.DecodeJSON(string(decompressed)), 262144)
                         }
 
                         streamDuration := time.Since(startTime)
@@ -925,8 +931,8 @@ func (s *Server) handleProxy(w http.ResponseWriter, r *http.Request) {
                                 OutputDataSize: 0,
                                 TotalDuration:  endTime.Sub(startTime).Milliseconds(),
                                 Status:         "error",
-                                InputParams:    callrecords.DecodeJSON(truncateString(string(bodyBytes), 262144)),
-                                OutputParams:   callrecords.DecodeJSON(truncateString(errMsg, 4096)),
+                                InputParams:    truncateString(callrecords.DecodeJSON(string(bodyBytes)), 262144),
+                                OutputParams:   truncateString(callrecords.DecodeJSON(errMsg), 4096),
                                 ProviderName:   usedProvider.ProviderName,
                                 ProviderModel:  usedProvider.ProviderModelName,
                                 IsStream:       isStreamRequest(bodyBytes),
@@ -969,8 +975,8 @@ func (s *Server) handleProxy(w http.ResponseWriter, r *http.Request) {
                         OutputDataSize: outputBytes,
                         TotalDuration:  endTime.Sub(startTime).Milliseconds(),
                         Status:         proxyStatus,
-                        InputParams:    callrecords.DecodeJSON(truncateString(string(bodyBytes), 262144)),
-                        OutputParams:   callrecords.DecodeJSON(capturedOutput), // 采集的完整输出数据（流式/非流式均支持，已UTF-8解码）
+                        InputParams:    truncateString(callrecords.DecodeJSON(string(bodyBytes)), 262144),
+                        OutputParams:   capturedOutput, // 采集的完整输出数据（流式/非流式均支持，已在采集时UTF-8解码+截断）
                         ProviderName:   usedProvider.ProviderName,
                         ProviderModel:  usedProvider.ProviderModelName,
                         IsStream:       isStreamRequest(bodyBytes),
@@ -1102,6 +1108,31 @@ func maskAPIKey(key string) string {
                 return "****"
         }
         return key[:4] + "****" + key[len(key)-4:]
+}
+
+// decompressGzipIfNeeded 检测数据是否为gzip压缩格式，如果是则解压返回原始数据
+// 通过检测gzip魔数（0x1f 0x8b）判断是否为gzip格式
+// 如果不是gzip格式或解压失败，返回原始数据不做改动
+func decompressGzipIfNeeded(data []byte) []byte {
+        if len(data) < 2 {
+                return data
+        }
+        // gzip magic number: 0x1f 0x8b
+        if data[0] != 0x1f || data[1] != 0x8b {
+                return data
+        }
+        reader, err := gzip.NewReader(bytes.NewReader(data))
+        if err != nil {
+                log.Printf("[代理] gzip解压创建reader失败: %v，使用原始数据", err)
+                return data
+        }
+        defer reader.Close()
+        decompressed, err := io.ReadAll(io.LimitReader(reader, MaxRequestBodySize))
+        if err != nil {
+                log.Printf("[代理] gzip解压读取失败: %v，使用原始数据", err)
+                return data
+        }
+        return decompressed
 }
 
 // truncateString 截断字符串到指定长度，超出部分用"..."替代
